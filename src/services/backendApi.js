@@ -12,7 +12,7 @@
 
 import axios from 'axios';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 const BACKEND_TIMEOUT = 20000; // 20s (puppeteer puede tardar un poco)
 
 const backend = axios.create({

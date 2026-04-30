@@ -32,7 +32,7 @@ export default function LivePage() {
     if (isFirstLoad.current) setLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://localhost:3001/api/fixtures/live');
+      const res = await fetch('${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/live');
       if (!res.ok) throw new Error('Error al obtener partidos en vivo');
       const json = await res.json();
       // Filtrar solo partidos realmente en vivo (no finalizados)

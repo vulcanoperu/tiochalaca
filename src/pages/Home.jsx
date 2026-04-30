@@ -82,7 +82,7 @@ export default function Home() {
     }
     setError(null);
     try {
-      const res = await fetch(`http://localhost:3001/api/fixtures/date/${dateKey}`);
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/date/${dateKey}`);
       if (!res.ok) throw new Error('Error al consultar el servidor');
       const json = await res.json();
       setFixtures(json.data || []);
@@ -99,7 +99,7 @@ export default function Home() {
   /* ── Fetch RÁPIDO solo de partidos en vivo (sin caché, 30s) ── */
   const mergeLiveScores = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/fixtures/live');
+      const res = await fetch('${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/live');
       if (!res.ok) return;
       const json = await res.json();
       const liveData = json.data || [];

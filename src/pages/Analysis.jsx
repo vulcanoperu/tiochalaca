@@ -94,7 +94,7 @@ export default function Analysis() {
     setAiLoading(false);
     try {
       // Fetch ESPN Summary
-      const summaryRes = await fetch(`http://localhost:3001/api/espn/summary/${fixtureId}`);
+      const summaryRes = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${fixtureId}`);
       if (!summaryRes.ok) throw new Error('Error al obtener el partido desde ESPN');
       const summary = await summaryRes.json();
 
@@ -126,8 +126,8 @@ export default function Analysis() {
       // Fetch team schedules (el backend ya filtra por 'post' y combina temporadas)
       const leagueSlug = summary.header.league?.slug || 'all';
       const [homeSchRes, awaySchRes] = await Promise.all([
-        fetch(`http://localhost:3001/api/espn/team/${homeId}/schedule?league=${leagueSlug}`),
-        fetch(`http://localhost:3001/api/espn/team/${awayId}/schedule?league=${leagueSlug}`)
+        fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/team/${homeId}/schedule?league=${leagueSlug}`),
+        fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/team/${awayId}/schedule?league=${leagueSlug}`)
       ]);
       const homeSch = await homeSchRes.json();
       const awaySch = await awaySchRes.json();
@@ -243,7 +243,7 @@ export default function Analysis() {
       // Fetch historical summaries para tramos (max 12 partidos por equipo para coincidir con la forma)
       const fetchHistEvents = async (matches) => {
         const ids = matches.slice(0, 12).map(m => m.fixture.id);
-        const results = await Promise.allSettled(ids.map(id => fetch(`http://localhost:3001/api/espn/summary/${id}`).then(r => r.json())));
+        const results = await Promise.allSettled(ids.map(id => fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${id}`).then(r => r.json())));
         let allEvs = [];
         results.forEach(r => {
            if (r.status === 'fulfilled' && r.value) {
@@ -330,7 +330,7 @@ export default function Analysis() {
   useEffect(() => {
     if (analysis && fixture && picksResult && !aiSummary && !aiLoading) {
       setAiLoading(true);
-      fetch('http://localhost:3001/api/ai/analyze', {
+      fetch('${import.meta.env.VITE_BACKEND_URL || ''}/api/ai/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -7,7 +7,7 @@
  * =====================================================================
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 
 /**
  * Solicita un análisis IA completo del partido al backend Gemini.

@@ -472,14 +472,18 @@ app.post('/api/ai/analyze', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log('\n⚽ ══════════════════════════════════════════════════');
-  console.log(`   CHALACA Backend Ligero  →  http://localhost:${PORT}`);
-  console.log('   ══════════════════════════════════════════════════');
-  console.log('   ✓ Caché en Memoria Activa');
-  console.log('   ✓ Transfermarkt & Understat Scrapers Activos');
-  console.log('   ✓ API-Sports (Caché proxy) Activa');
-  console.log(`   ✓ Gemini IA ${process.env.GEMINI_API_KEY ? 'Activa ✨' : 'INACTIVA (sin GEMINI_API_KEY)'}`);
-  console.log('⚽ ══════════════════════════════════════════════════\n');
-});
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log('\n⚽ ══════════════════════════════════════════════════');
+    console.log(`   CHALACA Backend Ligero  →  http://localhost:${PORT}`);
+    console.log('   ══════════════════════════════════════════════════');
+    console.log('   ✓ Caché en Memoria Activa');
+    console.log('   ✓ Transfermarkt & Understat Scrapers Activos');
+    console.log('   ✓ API-Sports (Caché proxy) Activa');
+    console.log(`   ✓ Gemini IA ${process.env.GEMINI_API_KEY ? 'Activa ✨' : 'INACTIVA (sin GEMINI_API_KEY)'}`);
+    console.log('⚽ ══════════════════════════════════════════════════\n');
+  });
+}
+
+module.exports = app;

@@ -124,7 +124,7 @@ export const getFixtures = (params) => safeGet('/fixtures', params, 6);
 export const getTodayFixtures = async () => {
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const res = await axios.get(`http://localhost:3001/api/fixtures/today?date=${today}`);
+    const res = await axios.get(`${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/today?date=${today}`);
     if (res.data && res.data.data) {
       return res.data.data;
     }
