@@ -75,6 +75,7 @@ function mapESPNToApiSports(event) {
 
 // ─── Lista de ligas permitidas y nombres en español ─────────────────────────
 const ALLOWED_LEAGUES = {
+  'ecu.1': 'LigaPro (Ecuador)',
   'per.1': 'Liga 1 (Perú)',
   'bra.1': 'Brasileirão (Brasil)',
   'arg.1': 'Liga Profesional (Argentina)',

@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, RefreshCw, AlertCircle, CheckCircle2,
-  Shield, Target, Clock, BarChart2, Users, Zap,
+  Shield, Target, Clock, BarChart2, Users, Zap, Activity
 } from 'lucide-react';
 import Loader from '../components/Loader';
 import {
@@ -36,27 +36,32 @@ const SECTION = ({ icon: Icon, title, children, id }) => (
 
 const AIBlock = ({ text, loading, title = "Análisis IA" }) => {
   if (loading) return (
-    <div className="mt-4 p-4 rounded-xl glass-card border border-[#8b5cf6]/30 bg-[#8b5cf6]/5 animate-pulse">
-      <div className="flex items-center gap-2 mb-3">
-        <Sparkles size={14} className="text-[#a78bfa]" />
-        <div className="h-3 bg-[#8b5cf6]/20 rounded w-1/4"></div>
+    <div className="mt-4 p-5 rounded-2xl glass-card border border-white/5 animate-pulse">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-8 h-8 rounded-full bg-surface-800 flex items-center justify-center">
+          <Sparkles size={16} className="text-accent-green opacity-50" />
+        </div>
+        <div className="h-4 bg-surface-800 rounded w-1/3"></div>
       </div>
-      <div className="space-y-2 pl-6">
-         <div className="h-2 bg-[#8b5cf6]/10 rounded w-full"></div>
-         <div className="h-2 bg-[#8b5cf6]/10 rounded w-5/6"></div>
-         <div className="h-2 bg-[#8b5cf6]/10 rounded w-4/6"></div>
+      <div className="space-y-3">
+         <div className="h-2 bg-white/5 rounded w-full"></div>
+         <div className="h-2 bg-white/5 rounded w-11/12"></div>
       </div>
     </div>
   );
-  if (!text) return null;
+  
+  if (!text || text === 'error') return null;
+
   return (
-    <div className="mt-4 p-4 rounded-xl glass-card border border-[#8b5cf6]/30 bg-[#8b5cf6]/5 relative overflow-hidden">
-      <div className="absolute top-0 left-0 w-1 h-full bg-[#8b5cf6]"></div>
-      <div className="flex items-center gap-2 mb-2">
-        <Sparkles size={14} className="text-[#a78bfa]" />
-        <h3 className="text-xs font-bold text-[#c4b5fd] tracking-wide uppercase">{title}</h3>
+    <div className="mt-4 p-5 rounded-2xl glass-card border border-white/5 relative overflow-hidden group hover:border-accent-green/20 transition-colors">
+      <div className="absolute top-0 left-0 w-1 h-full bg-accent-green/30 group-hover:bg-accent-green transition-colors"></div>
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-8 h-8 rounded-lg bg-surface-800 flex items-center justify-center border border-white/5">
+          <Sparkles size={16} className="text-accent-green" />
+        </div>
+        <h3 className="text-[10px] font-bold text-slate-400 tracking-[0.2em] uppercase">{title}</h3>
       </div>
-      <div className="text-sm text-slate-300 leading-relaxed pl-6">
+      <div className="text-sm text-slate-300 leading-relaxed pl-1">
         {text}
       </div>
     </div>
@@ -86,6 +91,60 @@ export default function Analysis() {
   const [aiSummary, setAiSummary]     = useState(null);
   const [aiLoading, setAiLoading]     = useState(false);
 
+  // ── Live clock (simple & bulletproof) ──────────────────────────────────
+  // baseRef holds the ESPN-seeded baseline; timerRef holds the interval
+  // tick is just a counter to force re-renders every second
+  const baseRef   = useRef(null);  // { serverSec: N, startedAt: Date.now() }
+  const timerRef  = useRef(null);
+  const [isLiveMatch, setIsLiveMatch] = useState(false);
+  const [tick, setTick]               = useState(0);
+  const pollRef   = useRef(null);
+
+  // ── Helper: parse ESPN status object → fixture status fields ─────────
+  const parseLiveStatus = useCallback((statusObj, state) => {
+    const rawDisplay  = statusObj?.displayClock || '0:00';
+    const period      = statusObj?.period ?? 1;
+    const description = statusObj?.type?.description || '';
+    const descLower   = description.toLowerCase();
+    // Only exact halftime — NOT '2nd half', '2nd period', etc.
+    const isHalftime  = state === 'in' && (
+      descLower === 'halftime' ||
+      descLower === 'half time' ||
+      descLower === 'half-time' ||
+      descLower.includes('entretiempo') ||
+      (descLower.includes('half') && !descLower.includes('1st') && !descLower.includes('2nd') && !descLower.includes('first') && !descLower.includes('second'))
+    );
+    const parts = rawDisplay.split(':');
+    const clockMins   = parseInt(parts[0]) || 0;
+    // If there's no seconds part, ESPN just sent minutes (e.g. "64'"). 
+    const clockSecs   = parts.length > 1 ? parseInt(parts[1]) || 0 : 0;
+    const hasSeconds  = parts.length > 1;
+
+    // ESPN displayClock already shows TOTAL elapsed match time (e.g. "64:01" in 2nd half = 64' total)
+    // No period offset needed
+    const elapsedSec  = state === 'in' && !isHalftime ? clockMins * 60 + clockSecs : null;
+    const short = state === 'post' ? 'FT' : state === 'in' ? (isHalftime ? 'HT' : 'LIVE') : 'NS';
+    return { short, long: description, rawDisplay, period, isHalftime, elapsedSec, hasSeconds };
+  }, []);
+
+  // ── Helper: extract corners from ESPN boxscore ───────────────────────
+  const extractCorners = useCallback((summaryData) => {
+    const teams = summaryData?.boxscore?.teams || [];
+    if (!teams[0]?.statistics) return null; // No stats available for this match
+    const homeStat = teams.find(t => t.homeAway === 'home')?.statistics?.find(s => s.name === 'wonCorners')?.displayValue || '0';
+    const awayStat = teams.find(t => t.homeAway === 'away')?.statistics?.find(s => s.name === 'wonCorners')?.displayValue || '0';
+    return { home: parseInt(homeStat), away: parseInt(awayStat) };
+  }, []);
+
+  const extractTeamCorners = (summaryData, teamIdStr) => {
+    const teams = summaryData?.boxscore?.teams || [];
+    if (!teams[0]?.statistics) return null;
+    const targetTeam = teams.find(t => String(t.team.id) === String(teamIdStr));
+    if (!targetTeam) return null;
+    const stat = targetTeam.statistics?.find(s => s.name === 'wonCorners')?.displayValue || '0';
+    return parseInt(stat);
+  };
+
   const fetchAll = useCallback(async () => {
     if (!fixtureId) return;
     setLoading(true);
@@ -93,8 +152,8 @@ export default function Analysis() {
     setAiSummary(null);
     setAiLoading(false);
     try {
-      // Fetch ESPN Summary
-      const summaryRes = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${fixtureId}`);
+      // Fetch ESPN Summary with cache-busting to avoid browser caching
+      const summaryRes = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
       if (!summaryRes.ok) throw new Error('Error al obtener el partido desde ESPN');
       const summary = await summaryRes.json();
 
@@ -106,11 +165,22 @@ export default function Analysis() {
       const homeId = homeComp.id;
       const awayId = awayComp.id;
 
-      // Construir objeto fixture básico para el header
+      const statusObj = summary.header.competitions[0].status;
+      const state = statusObj?.type?.state;
+      const getScore = (c) => parseInt(c?.score ?? 0);
+
+      // Use shared parser (same logic as live polling)
+      const parsed = parseLiveStatus(statusObj, state);
+
       const fix = {
         fixture: {
           id: fixtureId,
-          date: summary.header.competitions[0].date
+          date: summary.header.competitions[0].date,
+          status: { short: parsed.short, long: parsed.long },
+          liveClockDisplay: parsed.rawDisplay,
+          liveClockSeconds: parsed.elapsedSec,
+          livePeriod: parsed.period,
+          isHalftime: parsed.isHalftime,
         },
         league: {
           name: summary.header.league?.name || "Liga",
@@ -119,9 +189,23 @@ export default function Analysis() {
         teams: {
           home: { id: homeId, name: homeComp.team.name, logo: homeComp.team.logos?.[0]?.href },
           away: { id: awayId, name: awayComp.team.name, logo: awayComp.team.logos?.[0]?.href }
-        }
+        },
+        goals: {
+          home: getScore(homeComp),
+          away: getScore(awayComp)
+        },
+        corners: extractCorners(summary)
       };
       setFixture(fix);
+
+      // Seed live clock baseline
+      if (parsed.elapsedSec !== null) {
+        baseRef.current = { serverSec: parsed.elapsedSec, startedAt: Date.now() };
+        setIsLiveMatch(true);
+      } else {
+        baseRef.current = null;
+        setIsLiveMatch(false);
+      }
 
       // Fetch team schedules (el backend ya filtra por 'post' y combina temporadas)
       const leagueSlug = summary.header.league?.slug || 'all';
@@ -240,23 +324,35 @@ export default function Analysis() {
       const evs = extractEvents(summary);
       setEvents(evs);
 
-      // Fetch historical summaries para tramos (max 12 partidos por equipo para coincidir con la forma)
-      const fetchHistEvents = async (matches) => {
+      // Fetch historical summaries para tramos y corners (max 12 partidos por equipo)
+      const fetchHistSummaries = async (matches) => {
         const ids = matches.slice(0, 12).map(m => m.fixture.id);
         const results = await Promise.allSettled(ids.map(id => fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${id}`).then(r => r.json())));
-        let allEvs = [];
-        results.forEach(r => {
-           if (r.status === 'fulfilled' && r.value) {
-              allEvs.push(...extractEvents(r.value));
-           }
-        });
-        return allEvs;
+        return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
       };
 
-      const [homeHistEvs, awayHistEvs] = await Promise.all([
-         fetchHistEvents(hm),
-         fetchHistEvents(am)
+      const [homeHistSummaries, awayHistSummaries] = await Promise.all([
+         fetchHistSummaries(hm),
+         fetchHistSummaries(am)
       ]);
+
+      const homeHistEvs = homeHistSummaries.flatMap(s => extractEvents(s));
+      const awayHistEvs = awayHistSummaries.flatMap(s => extractEvents(s));
+
+      const analyzeCorners = (summaries, teamIdStr) => {
+        const cornersArr = summaries.map(s => extractTeamCorners(s, teamIdStr)).filter(c => c !== null);
+        if (!cornersArr.length) return null;
+        const total = cornersArr.reduce((a, b) => a + b, 0);
+        const avg = (total / cornersArr.length).toFixed(1);
+        const over3 = cornersArr.filter(c => c > 3).length;
+        const over4 = cornersArr.filter(c => c > 4).length;
+        const over5 = cornersArr.filter(c => c > 5).length;
+        const max = Math.max(...cornersArr);
+        return { avg, total, max, matches: cornersArr.length, over3, over4, over5 };
+      };
+
+      const homeCornersAnalysis = analyzeCorners(homeHistSummaries, homeId);
+      const awayCornersAnalysis = analyzeCorners(awayHistSummaries, awayId);
 
       // Map injuries (rosters / out)
       const inj = [];
@@ -314,7 +410,7 @@ export default function Analysis() {
         isLive, liveClock, liveHomeGoals, liveAwayGoals
       });
 
-      setAnalysis({ homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCards, awayCards });
+      setAnalysis({ homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCards, awayCards, homeCornersAnalysis, awayCornersAnalysis });
       setPicksResult(picksRes);
     } catch (e) {
       console.error(e);
@@ -326,11 +422,86 @@ export default function Analysis() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // ── Reseed clock on each poll ───────────────────────────────────────────
+  const pollLiveStatus = useCallback(async () => {
+    if (!fixtureId) return;
+    try {
+      const res  = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const comp      = data.header?.competitions?.[0];
+      if (!comp) return;
+      const statusObj = comp.status;
+      const state     = statusObj?.type?.state;
+      const parsed    = parseLiveStatus(statusObj, state);
+      const homeComp  = comp.competitors?.find(c => c.homeAway === 'home');
+      const awayComp  = comp.competitors?.find(c => c.homeAway === 'away');
+      const getScore  = c => parseInt(c?.score ?? 0);
+
+      setFixture(prev => prev ? ({
+        ...prev,
+        fixture: {
+          ...prev.fixture,
+          status:    { short: parsed.short, long: parsed.long },
+          isHalftime: parsed.isHalftime,
+          livePeriod: parsed.period,
+        },
+        goals: { home: getScore(homeComp), away: getScore(awayComp) },
+        corners: extractCorners(data) || prev.corners,
+      }) : prev);
+
+      if (parsed.elapsedSec !== null) {
+        if (!parsed.hasSeconds && baseRef.current) {
+           const currentExpectedMins = Math.floor(baseRef.current.serverSec / 60);
+           const newMins = Math.floor(parsed.elapsedSec / 60);
+           if (currentExpectedMins !== newMins) {
+              baseRef.current = { serverSec: parsed.elapsedSec, startedAt: Date.now() };
+           }
+        } else {
+           baseRef.current = { serverSec: parsed.elapsedSec, startedAt: Date.now() };
+        }
+        setIsLiveMatch(true);
+      } else {
+        baseRef.current = null;
+        setIsLiveMatch(false);
+        if (parsed.short === 'FT') {
+          clearInterval(pollRef.current);
+          clearInterval(timerRef.current);
+          pollRef.current = null;
+          timerRef.current = null;
+        }
+      }
+    } catch (_) { /* silent */ }
+  }, [fixtureId, parseLiveStatus]);
+
+  // ── Polling every 15s when live or HT — fires immediately on start ────
+  useEffect(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    const status = fixture?.fixture?.status?.short;
+    if (status === 'LIVE' || status === 'HT') {
+      pollLiveStatus();                                        // immediate first call
+      pollRef.current = setInterval(pollLiveStatus, 15_000);  // then every 15s
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [fixture?.fixture?.status?.short, pollLiveStatus]);
+
+  // ── 1-second ticker: starts when isLiveMatch=true, reads baseRef directly ──
+  useEffect(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    if (isLiveMatch && baseRef.current) {
+      // Kick immediately so display updates right away
+      setTick(t => t + 1);
+      timerRef.current = setInterval(() => setTick(t => t + 1), 1000);
+    }
+    return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
+  }, [isLiveMatch]); // only restarts when isLiveMatch changes
+
   // Effect for fetching AI automatically when analysis is ready
   useEffect(() => {
     if (analysis && fixture && picksResult && !aiSummary && !aiLoading) {
       setAiLoading(true);
-      fetch('${import.meta.env.VITE_BACKEND_URL || ''}/api/ai/analyze', {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+      fetch(`${backendUrl}/api/ai/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -352,39 +523,51 @@ export default function Analysis() {
           awayMatches: awayMatches.slice(0, 12),
         })
       })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
       .then(data => {
         if (data.data && typeof data.data === 'object') {
           setAiSummary(data.data);
         } else {
           console.warn('AI no devolvió JSON válido', data);
-          setAiSummary({ error: true }); // Evita bucle infinito
+          setAiSummary({ error: true, message: 'Formato de respuesta inválido' });
         }
       })
       .catch(err => {
         console.error('Error IA:', err);
-        setAiSummary({ error: true }); // Evita bucle infinito
+        setAiSummary({ error: true, message: err.message });
       })
       .finally(() => setAiLoading(false));
     }
   }, [analysis, fixture, picksResult, aiSummary, aiLoading, fixtureId, h2hMatches, injuries, homeMatches, awayMatches]);
 
-  const saveAllPicks = () => {
-    if (!picksResult?.picks?.length || !fixture) return;
+  const saveIndividualPick = (pick) => {
+    if (!pick || !fixture) return;
     const entry = {
-      id: Date.now(),
+      id: Date.now() + Math.random(),
       fixtureId,
       home: fixture.teams?.home?.name,
       away: fixture.teams?.away?.name,
       date: fixture.fixture?.date,
       league: fixture.league?.name,
-      picks: picksResult.picks,
+      score: fixture.fixture?.status?.short === 'FT' || fixture.fixture?.status?.short === 'LIVE' ? {
+        home: fixture.goals?.home,
+        away: fixture.goals?.away
+      } : null,
+      picks: [pick],
       savedAt: new Date().toISOString(),
     };
-    setSavedPicks(prev => [entry, ...prev]);
-    localStorage.setItem('tipster_picks', JSON.stringify([entry, ...savedPicks]));
+    
+    const existing = JSON.parse(localStorage.getItem('tipster_picks') || '[]');
+    const updated = [entry, ...existing];
+    localStorage.setItem('tipster_picks', JSON.stringify(updated));
+    setSavedPicks(updated);
+    
+    // Feedback visual temporal
     setPickSaved(true);
-    setTimeout(() => setPickSaved(false), 3000);
+    setTimeout(() => setPickSaved(false), 2000);
   };
 
   if (loading) return (
@@ -433,9 +616,27 @@ export default function Analysis() {
         </button>
         <div>
           <p className="section-title">Análisis Tipster</p>
-          <p className="text-xs text-slate-500 mt-0.5">{fixture?.league?.name} · {kickoff}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-slate-500 mt-0.5">{fixture?.league?.name} · {kickoff}</p>
+            {(!aiSummary || aiSummary.error) && !aiLoading && (
+              <button 
+                onClick={() => { setAiSummary(null); setAiLoading(false); }}
+                className="text-[10px] bg-[#8b5cf6]/20 text-[#a78bfa] px-2 py-0.5 rounded border border-[#8b5cf6]/30 hover:bg-[#8b5cf6]/40 transition-colors"
+              >
+                {aiSummary?.error ? 'Reintentar IA ↻' : 'Cargar IA ✨'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
+
+      {aiSummary?.error && (
+        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] flex items-center gap-2">
+          <AlertCircle size={12} />
+          Error en la conexión con la IA: {aiSummary.message || 'Error desconocido'}. 
+          Asegúrate de que el backend (puerto 3001) esté corriendo.
+        </div>
+      )}
 
       {/* Match hero */}
       <div className="glass-card p-6"
@@ -454,17 +655,84 @@ export default function Analysis() {
             </span>
           </div>
 
-          {/* VS center */}
-          <div className="flex flex-col items-center gap-2">
-            <div className="text-2xl font-black text-slate-600 font-mono">VS</div>
-            {poisson && (
-              <div className="flex gap-2">
-                <ProbCircle prob={poisson.home} label="Local" color="#00ff88" />
-                <ProbCircle prob={poisson.draw} label="Empate" color="#ffd700" />
-                <ProbCircle prob={poisson.away} label="Visit." color="#ff4757" />
+          {/* VS / Scoreboard center */}
+          <div className="flex flex-col items-center gap-3">
+            {(fixture?.fixture?.status?.short !== 'NS' || fixture?.goals?.home > 0 || fixture?.goals?.away > 0) ? (
+              <div className="flex flex-col items-center animate-in fade-in zoom-in duration-500">
+                <div className="flex items-center gap-4">
+                  <div className="text-5xl font-black text-white font-mono bg-surface-900/80 px-6 py-4 rounded-2xl border-2 border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center justify-center min-w-[140px] tracking-tighter">
+                    <span className="text-accent-green">{fixture.goals?.home ?? 0}</span>
+                    <span className="mx-2 text-slate-700 opacity-50">-</span>
+                    <span className="text-accent-green">{fixture.goals?.away ?? 0}</span>
+                  </div>
+                </div>
+
+                {/* Live clock / Halftime / Finished badge */}
+                {(() => {
+                  const status = fixture?.fixture?.status?.short;
+                  // Compute elapsed time fresh from wall-clock on every render (tick drives re-renders)
+                  const currentSec = (isLiveMatch && baseRef.current)
+                    ? baseRef.current.serverSec + Math.floor((Date.now() - baseRef.current.startedAt) / 1000)
+                    : null;
+
+                  if (status === 'HT') return (
+                    // ── ENTRETIEMPO ──
+                    <div className="mt-3 flex flex-col items-center gap-1.5">
+                      <div className="px-5 py-2 rounded-full flex items-center gap-2.5"
+                        style={{ background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.4)' }}>
+                        <span className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-400">☕ Descanso</span>
+                      </div>
+                      <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-orange-400/50">45:00 · Entretiempo</span>
+                    </div>
+                  );
+
+                  if (status === 'LIVE' && currentSec !== null) {
+                    const dispMin   = Math.floor(currentSec / 60);
+                    const dispSec   = currentSec % 60;
+                    const period    = fixture.fixture.livePeriod ?? 1;
+                    const halfLabel = period === 1 ? '1T' : period === 2 ? '2T' : `P${period}`;
+                    return (
+                      // ── EN VIVO con reloj en tiempo real ──
+                      <div className="mt-3 flex flex-col items-center gap-1.5">
+                        <div className="px-4 py-1.5 rounded-full bg-accent-red/10 border border-accent-red/40 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-accent-red animate-pulse"></span>
+                          <span className="font-mono text-accent-red font-black text-base tracking-widest">
+                            {String(dispMin).padStart(2,'0')}:{String(dispSec).padStart(2,'0')}
+                          </span>
+                          <span className="text-[9px] font-bold text-accent-red/60 uppercase tracking-widest">{halfLabel}</span>
+                        </div>
+                        <span className="text-[9px] text-accent-red/50 font-bold uppercase tracking-[0.2em]">En Vivo</span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    // ── FINALIZADO u otro estado ──
+                    <div className={`mt-3 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2 border ${
+                      status === 'LIVE'
+                        ? 'bg-accent-red/10 border-accent-red/30 text-accent-red animate-pulse'
+                        : 'bg-accent-green/10 border-accent-green/30 text-accent-green'
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${status === 'LIVE' ? 'bg-accent-red' : 'bg-accent-green'}`}></span>
+                      {status === 'LIVE' ? 'En Vivo' : 'Finalizado'}
+                    </div>
+                  );
+                })()}
+
               </div>
+            ) : (
+              <>
+                <div className="text-3xl font-black text-slate-700 font-mono tracking-widest opacity-40">VS</div>
+                {poisson && (
+                  <div className="flex gap-2 bg-white/5 p-2 rounded-xl border border-white/5">
+                    <ProbCircle prob={poisson.home} label="Local" color="#00ff88" />
+                    <ProbCircle prob={poisson.draw} label="Empate" color="#ffd700" />
+                    <ProbCircle prob={poisson.away} label="Visit." color="#ff4757" />
+                  </div>
+                )}
+                <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest">Modelo Poisson</p>
+              </>
             )}
-            <p className="text-[10px] text-slate-600">Modelo Poisson</p>
           </div>
 
           {/* Away */}
@@ -482,56 +750,30 @@ export default function Analysis() {
         </div>
       </div>
 
+
+
       {/* ── PICKS (the star) ── */}
       <SECTION icon={Zap} title="📊 Picks Recomendados" id="picks">
+        {/* ── VEREDICTO IA GENERAL (Ahora al principio) ── */}
+        {(aiLoading || aiSummary?.verdict) && (
+          <AIBlock text={aiSummary?.verdict} loading={aiLoading} title="Veredicto IA Gemini" />
+        )}
+
         {picksResult && (
-          <>
-            <PicksTable picks={picksResult.picks} reason={picksResult.reason} />
-            {picksResult.picks?.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-white/5 space-y-3">
-
-                {/* Validation checklist */}
-                <div className="rounded-lg p-3 text-xs space-y-1.5"
-                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                  <p className="text-slate-400 font-semibold mb-2">✅ Validación final</p>
-                  {['Alineaciones revisadas (verificar antes del partido)', 'Noticias de última hora comprobadas', 'Sin cambios relevantes inesperados'].map(c => (
-                    <div key={c} className="flex items-center gap-2 text-slate-500">
-                      <CheckCircle2 size={12} className="text-accent-green shrink-0" />
-                      {c}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Save button */}
-                <button onClick={saveAllPicks}
-                  disabled={pickSaved}
-                  className={`btn-primary w-full justify-center ${pickSaved ? 'opacity-70' : ''}`}>
-                  {pickSaved ? <><CheckCircle2 size={14} /> Picks guardados</> : <><Target size={14} /> Guardar picks</>}
-                </button>
-              </div>
-            )}
-          </>
+          <div className="space-y-4">
+            <PicksTable 
+              picks={picksResult.picks} 
+              reason={picksResult.reason} 
+              onSavePick={saveIndividualPick}
+            />
+          </div>
         )}
       </SECTION>
 
-      {/* ── VEREDICTO IA GENERAL ── */}
-      {(aiLoading || aiSummary?.verdict) && (
-        <section className="glass-card p-5 animate-slide-up bg-gradient-to-r from-[#8b5cf6]/10 to-transparent border-l-4 border-l-[#8b5cf6]">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles size={16} className="text-[#a78bfa]" />
-            <h2 className="text-sm font-bold text-white">Veredicto IA Gemini</h2>
-          </div>
-          <AIBlock text={aiSummary?.verdict} loading={aiLoading} />
-          {aiSummary?.warnings && (
-            <div className="mt-3 pt-3 border-t border-[#8b5cf6]/20">
-              <p className="text-xs text-[#fca5a5] font-semibold mb-1">⚠️ Advertencias del modelo:</p>
-              <p className="text-xs text-[#fecaca] leading-relaxed">{aiSummary.warnings}</p>
-            </div>
-          )}
-        </section>
-      )}
-
       {/* ── FORMA RECIENTE ── */}
+      {(aiLoading || aiSummary?.context) && (
+        <AIBlock text={aiSummary?.context} loading={aiLoading} title="Análisis de Forma y Contexto" />
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {[
           { team: fixture?.teams?.home, form: homeForm, matches: homeMatches, split: homeSplit, teamId: homeId, color: '#00ff88' },
@@ -570,11 +812,12 @@ export default function Analysis() {
           </SECTION>
         ))}
       </div>
-      {(aiLoading || aiSummary?.context) && (
-        <AIBlock text={aiSummary?.context} loading={aiLoading} title="Análisis de Forma y Contexto" />
-      )}
+
 
       {/* ── GOLES POR TRAMO ── */}
+      {(aiLoading || aiSummary?.stats) && (
+        <AIBlock text={aiSummary?.stats} loading={aiLoading} title="Análisis de Tendencias Goleadoras" />
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         {[
           { label: fixture?.teams?.home?.name, slots: homeSlots, color: '#00ff88', actualGoals: homeForm?.goalsFor || 0 },
@@ -586,12 +829,13 @@ export default function Analysis() {
           </SECTION>
         ))}
       </div>
-      {(aiLoading || aiSummary?.stats) && (
-        <AIBlock text={aiSummary?.stats} loading={aiLoading} title="Análisis de Tendencias Goleadoras" />
-      )}
+
 
       {/* ── H2H ── */}
       <SECTION icon={Users} title="H2H · Historial de enfrentamientos" id="h2h">
+        {(aiLoading || aiSummary?.h2h) && (
+          <AIBlock text={aiSummary?.h2h} loading={aiLoading} title="Análisis H2H" />
+        )}
         {h2hData && (
           <div className="grid grid-cols-3 gap-3 mb-4">
             <div className="text-center">
@@ -620,7 +864,7 @@ export default function Analysis() {
             <StatRow label="Partidos analizados" value={h2hData.total} />
           </div>
         )}
-        <AIBlock text={aiSummary?.h2h} loading={aiLoading} title="Análisis de Enfrentamientos Directos" />
+
       </SECTION>
 
       {/* ── TARJETAS ── */}
@@ -657,9 +901,59 @@ export default function Analysis() {
         </div>
       )}
 
+      {/* ── CORNERS ── */}
+      {(analysis?.homeCornersAnalysis || analysis?.awayCornersAnalysis) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
+          {[
+            { label: fixture?.teams?.home?.name, corners: analysis.homeCornersAnalysis },
+            { label: fixture?.teams?.away?.name, corners: analysis.awayCornersAnalysis },
+          ].map(({ label, corners }) => (
+            <SECTION key={`corners-${label}`} icon={Activity} title={`🚩 Tiros de Esquina · ${label}`} id={`corners-${label}`}>
+              {corners ? (
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="text-center flex-1 border-r border-white/10">
+                      <p className="text-2xl font-bold font-mono text-white leading-none">{corners.avg}</p>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media p/p</p>
+                    </div>
+                    <div className="text-center flex-1">
+                      <p className="text-2xl font-bold font-mono text-slate-300 leading-none">{corners.max}</p>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Máximo</p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-surface-900 rounded-lg p-3">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Córners (Últ. {corners.matches} Ptos)</p>
+                    <div className="grid grid-cols-3 gap-2">
+                       <div className="bg-white/5 rounded px-2 py-2 text-center">
+                          <p className="text-sm font-black text-accent-green">{Math.round((corners.over3/corners.matches)*100)}%</p>
+                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 3</p>
+                       </div>
+                       <div className="bg-white/5 rounded px-2 py-2 text-center">
+                          <p className="text-sm font-black text-amber-400">{Math.round((corners.over4/corners.matches)*100)}%</p>
+                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 4</p>
+                       </div>
+                       <div className="bg-white/5 rounded px-2 py-2 text-center">
+                          <p className="text-sm font-black text-accent-red">{Math.round((corners.over5/corners.matches)*100)}%</p>
+                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 5</p>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-600 p-4 text-center">Sin datos de tiros de esquina</p>
+              )}
+            </SECTION>
+          ))}
+        </div>
+      )}
+
       {/* ── LESIONES ── */}
       {injuries.length > 0 && (
         <SECTION icon={Shield} title="🚑 Lesiones y bajas" id="injuries">
+          {(aiLoading || aiSummary?.injuries) && (
+            <AIBlock text={aiSummary?.injuries} loading={aiLoading} title="Impacto de Bajas" />
+          )}
           <div className="space-y-2">
             {injuries.slice(0, 10).map((inj, i) => (
               <div key={i} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
@@ -678,7 +972,7 @@ export default function Analysis() {
               </div>
             ))}
           </div>
-          <AIBlock text={aiSummary?.injuries} loading={aiLoading} title="Impacto de Bajas y Lesiones" />
+
         </SECTION>
       )}
 

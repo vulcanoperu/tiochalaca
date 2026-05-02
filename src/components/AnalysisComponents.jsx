@@ -247,7 +247,7 @@ function H2HTable({ matches, homeId, awayId, homeName, awayName }) {
 /**
  * Picks table - the main output
  */
-function PicksTable({ picks, reason }) {
+function PicksTable({ picks, reason, onSavePick }) {
   if (!picks || picks.length === 0) {
     return (
       <div className="text-center py-8">
@@ -263,8 +263,19 @@ function PicksTable({ picks, reason }) {
   const preMatchPicks = picks.filter(p => !isLivePick(p.market));
   const livePicks = picks.filter(p => isLivePick(p.market));
 
-  const PickCard = ({ pick }) => (
-    <div className="rounded-xl p-4 border transition-all duration-300 relative overflow-hidden glass-card"
+  const PickCard = ({ pick }) => {
+    const [saved, setSaved] = useState(false);
+
+    const handleSave = () => {
+      if (onSavePick) {
+        onSavePick(pick);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    };
+
+    return (
+      <div className="rounded-xl p-4 border transition-all duration-300 relative overflow-hidden glass-card group"
       style={{
         background: pick.probability >= 85
           ? 'linear-gradient(135deg,rgba(0,255,136,0.08),rgba(0,204,106,0.02))'
@@ -303,13 +314,26 @@ function PicksTable({ picks, reason }) {
         </div>
       </div>
       <p className="text-xs text-slate-400 leading-relaxed border-t border-white/10 pt-2.5 mt-2 pl-2">{pick.argument}</p>
-      <div className="flex items-center gap-2 mt-2 pl-2">
+      <div className="flex items-center justify-between mt-3 pl-2">
         <span className={`text-[9px] px-2 py-0.5 rounded uppercase font-bold tracking-wide ${pick.risk === 'Bajo' ? 'badge-green' : pick.risk === 'Moderado' ? 'badge-yellow' : 'badge-red'}`}>
           Riesgo {pick.risk}
         </span>
+        
+        <button 
+          onClick={handleSave}
+          disabled={saved}
+          className={`flex items-center gap-1.5 text-[11px] px-4 py-1.5 rounded-full border font-bold transition-all transform active:scale-95 ${
+            saved 
+              ? 'bg-accent-green/20 border-accent-green text-accent-green shadow-[0_0_10px_rgba(0,255,136,0.2)]' 
+              : 'bg-gradient-to-r from-accent-green to-emerald-600 border-transparent text-surface-900 hover:shadow-[0_0_15px_rgba(0,255,136,0.3)] hover:-translate-y-0.5'
+          }`}
+        >
+          {saved ? '✅ Guardado' : '🎯 Guardar Pronóstico'}
+        </button>
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-6">

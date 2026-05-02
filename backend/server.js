@@ -207,7 +207,9 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────
 app.get('/api/espn/summary/:id', async (req, res) => {
   try {
-    const { data } = await axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${req.params.id}`);
+    // Añadimos un timestamp (?t=Date.now()) para evitar el caché agresivo (CDN) de ESPN 
+    // que suele causar un desfase de ~1 minuto en los partidos en vivo.
+    const { data } = await axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${req.params.id}&t=${Date.now()}`);
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -458,16 +460,29 @@ app.post('/api/ai/analyze', async (req, res) => {
 
   try {
     const { text } = await generateAIAnalysis(matchData);
-    let parsedData = text;
+    let parsedData = null;
     try {
       parsedData = JSON.parse(text);
     } catch (e) {
-      console.warn('Gemini response was not valid JSON:', text.substring(0, 50));
+      return res.status(500).json({ error: 'La IA no devolvió un formato válido', raw: text });
     }
-    cacheSet(cacheKey, parsedData, 30); // 30 minutos
+    cacheSet(cacheKey, parsedData, 30);
     return res.json({ source: 'gemini', fromCache: false, data: parsedData });
   } catch (err) {
-    console.error('[Gemini] Error:', err.message);
+    // ── MODO DE RESCATE: Si falla la cuota, generamos un análisis básico estadístico ──
+    if (err.message.includes('quota') || err.message.includes('429')) {
+      const fallback = {
+        context: `[Modo Rescate] El ${matchData.homeName} llega con una forma del ${matchData.homeForm?.score}% contra el ${matchData.awayForm?.score}% del ${matchData.awayName}. Basado en la data de ESPN, esperamos un duelo táctico en la liga ${matchData.leagueName}.`,
+        stats: `Tendencia de goles: El equipo local tiene un ${matchData.homeSplit?.over25Pct}% de Over 2.5, mientras que el visitante promedia ${matchData.awaySplit?.over25Pct}% en sus últimos encuentros.`,
+        h2h: `En enfrentamientos directos, el local ha ganado el ${matchData.h2hData?.homeWinPct}% de las veces.`,
+        injuries: matchData.injuries?.length > 0 ? `Se reportan ${matchData.injuries.length} bajas importantes que podrían afectar el rendimiento.` : "No se reportan bajas críticas.",
+        verdict: "Análisis estadístico: Alta probabilidad de cumplimiento de los picks basados en el modelo Poisson.",
+        picks: matchData.picks?.slice(0, 2) || [],
+        warnings: "Riesgo moderado. Análisis generado por motor estadístico ante saturación de servicios IA."
+      };
+      return res.json({ source: 'fallback-engine', fromCache: false, data: fallback });
+    }
+    console.error('[Gemini] Error fatal:', err.message);
     return res.status(500).json({ error: 'Error generando análisis IA', details: err.message });
   }
 });

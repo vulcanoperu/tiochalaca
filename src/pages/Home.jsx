@@ -99,7 +99,7 @@ export default function Home() {
   /* ── Fetch RÁPIDO solo de partidos en vivo (sin caché, 30s) ── */
   const mergeLiveScores = useCallback(async () => {
     try {
-      const res = await fetch('${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/live');
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/live`);
       if (!res.ok) return;
       const json = await res.json();
       const liveData = json.data || [];

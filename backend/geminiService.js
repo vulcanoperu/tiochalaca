@@ -120,21 +120,26 @@ ${fmtPicks(picks)}
   TU TAREA
 ═══════════════════════════════════════════
 
-Genera un informe tipster **completo y profesional**.
-REGLA DE ORO: Devuelve EXCLUSIVAMENTE un objeto JSON válido (sin formato Markdown \`\`\`json) con las siguientes claves exactas. En cada valor, escribe un breve párrafo analizando con los datos provistos. Si no hay datos, indica que no hay suficientes datos para el análisis.
+Eres un "Sharp Bettor" y analista táctico de élite. Tu objetivo NO es repetir los números que ya están en pantalla, sino interpretar lo que significan para el apostador.
 
+REGLAS CRÍTICAS DE ESTILO:
+1. PROHIBIDO repetir estadísticas exactas (ej. no digas "el equipo tiene 60% de over"). El usuario ya ve los números.
+2. ENFOQUE TÁCTICO: Habla de estilos de juego, presión, cansancio o importancia del torneo.
+3. VALOR AÑADIDO: Da consejos que un algoritmo matemático no vería.
+4. TONO: Profesional, directo, de experto a experto.
+
+Estructura de respuesta (JSON puro):
 {
-  "context": "Analiza la importancia del encuentro y compara la forma reciente (Victorias/Empates/Derrotas y goles) basándote en los últimos 10 partidos provistos.",
-  "stats": "Interpreta las tendencias de Over/Under y Ambos Anotan (BTTS). Habla sobre la efectividad goleadora según la data.",
-  "h2h": "Análisis del historial de enfrentamientos (H2H).",
-  "injuries": "Menciona el impacto de las bajas y lesiones provistas.",
-  "verdict": "Concluye de forma directa qué equipo llega mejor o qué mercado tiene más valor.",
-  "picks": "Genera 2 o 3 picks recomendados con su justificación.",
-  "warnings": "Menciona riesgos o variables que podrían romper el pronóstico."
+  "context": "Análisis del escenario del partido. ¿Qué se juegan? ¿Hay un equipo que llega 'inflado' o subestimado por los números?",
+  "stats": "Lectura entre líneas de las tendencias. Ej: ¿Por qué hay goles tarde? ¿Es por fragilidad defensiva o empuje final?",
+  "h2h": "La psicología del enfrentamiento. ¿Hay una paternidad histórica o un patrón táctico que se repite?",
+  "injuries": "Análisis de la profundidad de plantilla. ¿Quién cubrirá la baja y cómo cambia el sistema?",
+  "verdict": "Tu lectura final del partido como experto humano. ¿Dónde está la trampa o la oportunidad?",
+  "picks": "2-3 consejos de apuestas de alto valor con justificación táctica.",
+  "warnings": "Variables 'caóticas' que podrían arruinar el análisis (clima, arbitraje, motivación)."
 }
 
----
-Sé preciso, profesional, sin relleno. Habla como un tipster experto que justifica todo con la data en pantalla.`;
+IMPORTANTE: Responde solo el JSON crudo. Justifica todo con la data pero desde una perspectiva narrativa y de asesoría.`;
 }
 
 /**
@@ -148,7 +153,7 @@ async function generateAIAnalysis(matchData) {
   }
 
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.0-flash-lite',
     generationConfig: {
       temperature: 0.7,
       topP: 0.9,
@@ -160,7 +165,14 @@ async function generateAIAnalysis(matchData) {
   const prompt = buildPrompt(matchData);
   const result = await model.generateContent(prompt);
   const response = await result.response;
-  const text = response.text();
+  let text = response.text();
+  
+  // Limpieza de Markdown si el modelo ignora el system prompt
+  if (text.includes('```json')) {
+    text = text.split('```json')[1].split('```')[0].trim();
+  } else if (text.includes('```')) {
+    text = text.split('```')[1].split('```')[0].trim();
+  }
 
   return { text, cached: false };
 }
