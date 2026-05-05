@@ -52,17 +52,24 @@ export default function AdminPage() {
 
   const currentUser = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
 
-  useEffect(() => { loadUsers(); }, []);
+  useEffect(() => {
+    loadUsers();
+    // Auto-refresh cada 10 segundos en segundo plano
+    const interval = setInterval(() => {
+      loadUsers(true);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const loadUsers = async () => {
-    setLoading(true);
+  const loadUsers = async (silent = false) => {
+    if (!silent) setLoading(true);
     const res = await fetchAdminUsers();
     if (res.success) {
       setUsers(res.users);
-    } else {
+    } else if (!silent) {
       setError(res.error || 'Error al cargar usuarios. ¿Eres administrador?');
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   };
 
   const handleDelete = async (id, username) => {
