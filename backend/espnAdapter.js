@@ -69,6 +69,10 @@ function mapESPNToApiSports(event) {
     goals: {
       home: getScore(home),
       away: getScore(away)
+    },
+    redCards: {
+      home: parseInt(home?.redCards ?? 0),
+      away: parseInt(away?.redCards ?? 0)
     }
   };
 }

@@ -86,6 +86,9 @@ export default function MatchCard({ fixture, onClick }) {
         <div className="flex flex-col items-center gap-1 shrink-0">
           {(status === 'FT' || isLive) ? (
             <div className="flex items-center gap-2">
+              {fixture.redCards?.home > 0 && (
+                <div className="w-2 h-3 bg-red-600 rounded-sm shadow-[0_0_8px_rgba(255,0,0,0.5)] animate-pulse" title="Tarjeta Roja" />
+              )}
               <span className={`text-2xl font-bold font-mono tabular-nums ${isLive ? 'text-white' : 'text-slate-300'}`}>
                 {goals?.home ?? 0}
               </span>
@@ -93,6 +96,9 @@ export default function MatchCard({ fixture, onClick }) {
               <span className={`text-2xl font-bold font-mono tabular-nums ${isLive ? 'text-white' : 'text-slate-300'}`}>
                 {goals?.away ?? 0}
               </span>
+              {fixture.redCards?.away > 0 && (
+                <div className="w-2 h-3 bg-red-600 rounded-sm shadow-[0_0_8px_rgba(255,0,0,0.5)] animate-pulse" title="Tarjeta Roja" />
+              )}
             </div>
           ) : (
             <div className="text-slate-600 text-xl font-mono">vs</div>

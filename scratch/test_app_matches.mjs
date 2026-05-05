@@ -186,7 +186,8 @@ async function analyzeMatch(ev) {
       marketOdds, advancedStats,
       injuries: summary.injuries || [],
       homeTeamName: homeC.team.name,
-      awayTeamName: awayC.team.name
+      awayTeamName: awayC.team.name,
+      leagueName: ev._leagueName || ''
     });
 
     return {
@@ -203,8 +204,8 @@ async function analyzeMatch(ev) {
 }
 
 async function run() {
-  console.log('Fetching matches for 20260504 strictly from ALLOWED_LEAGUES...');
-  const matches = await getAppMatches('20260504');
+  console.log('Fetching matches for 20260502 strictly from ALLOWED_LEAGUES...');
+  const matches = await getAppMatches('20260502');
   console.log(`Found ${matches.length} matches shown on the app.\n`);
   
   let totalPicks = 0;
@@ -257,7 +258,7 @@ async function run() {
     }
   }
 
-  console.log(`🏆 RESUMEN FINAL DE LA APP (4 DE MAYO DE 2026)`);
+  console.log(`🏆 RESUMEN FINAL DE LA APP (2 DE MAYO DE 2026)`);
   console.log(`Partidos analizados con picks: ${totalPicks > 0 ? 'Sí' : 'No'}`);
   console.log(`Total Predicciones Publicadas: ${totalPicks}`);
   console.log(`Predicciones Ganadas: ${wonPicks}`);

@@ -318,24 +318,27 @@ export default function Analysis() {
       };
 
       const analyzeCardsFromSummaries = (summaries, teamIdStr) => {
+        let yellow = 0, red = 0;
         const cardsArr = summaries.map(s => {
            let count = 0;
            (s.keyEvents || []).forEach(e => {
              if (e.type?.text?.includes('Card') && String(e.team?.id) === String(teamIdStr)) {
                count++;
+               if (e.type?.text?.toLowerCase().includes('red')) red++;
+               else yellow++;
              }
            });
            return count;
-        });
+         });
         if (!cardsArr.length) return null;
         const total = cardsArr.reduce((a, b) => a + b, 0);
         const avg = (total / cardsArr.length).toFixed(1);
-        // Cards lines are usually lower than corners, e.g. over 1.5, 2.5, 3.5 for a SINGLE team
+        const avgRed = (red / cardsArr.length).toFixed(2);
         const over1 = cardsArr.filter(c => c > 1).length;
         const over2 = cardsArr.filter(c => c > 2).length;
         const over3 = cardsArr.filter(c => c > 3).length;
         const max = Math.max(...cardsArr);
-        return { avg, total, max, matches: cardsArr.length, over1, over2, over3 };
+        return { avg, total, max, matches: cardsArr.length, over1, over2, over3, red, avgRed };
       };
 
       const homeCornersAnalysis = analyzeCorners(homeHistSummaries, homeId);
@@ -693,10 +696,16 @@ export default function Analysis() {
             {(fixture?.fixture?.status?.short !== 'NS' || fixture?.goals?.home > 0 || fixture?.goals?.away > 0) ? (
               <div className="flex flex-col items-center animate-in fade-in zoom-in duration-500">
                 <div className="flex items-center gap-4">
-                  <div className="text-5xl font-black text-white font-mono bg-surface-900/80 px-6 py-4 rounded-2xl border-2 border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center justify-center min-w-[140px] tracking-tighter">
+                  <div className="text-5xl font-black text-white font-mono bg-surface-900/80 px-6 py-4 rounded-2xl border-2 border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center justify-center min-w-[140px] tracking-tighter relative">
+                    {fixture.redCards?.home > 0 && (
+                      <div className="absolute -left-6 w-3 h-5 bg-red-600 rounded-sm shadow-[0_0_15px_rgba(255,0,0,0.6)] animate-pulse" title={`${fixture.redCards.home} Tarjeta(s) Roja(s)`} />
+                    )}
                     <span className="text-accent-green">{fixture.goals?.home ?? 0}</span>
                     <span className="mx-2 text-slate-700 opacity-50">-</span>
                     <span className="text-accent-green">{fixture.goals?.away ?? 0}</span>
+                    {fixture.redCards?.away > 0 && (
+                      <div className="absolute -right-6 w-3 h-5 bg-red-600 rounded-sm shadow-[0_0_15px_rgba(255,0,0,0.6)] animate-pulse" title={`${fixture.redCards.away} Tarjeta(s) Roja(s)`} />
+                    )}
                   </div>
                 </div>
 
@@ -896,7 +905,11 @@ export default function Analysis() {
                   <div className="flex justify-between items-center mb-4">
                     <div className="text-center flex-1 border-r border-white/10">
                       <p className="text-2xl font-bold font-mono text-white leading-none">{cards.avg}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media p/p</p>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media Tarjetas</p>
+                    </div>
+                    <div className="text-center flex-1 border-r border-white/10">
+                      <p className="text-2xl font-bold font-mono text-accent-red leading-none">{cards.avgRed}</p>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media Rojas</p>
                     </div>
                     <div className="text-center flex-1">
                       <p className="text-2xl font-bold font-mono text-slate-300 leading-none">{cards.max}</p>

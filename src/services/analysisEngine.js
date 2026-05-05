@@ -275,6 +275,7 @@ export function generatePicks({
   injuries = [],
   homeTeamName = '',
   awayTeamName = '',
+  leagueName = '',
   homeRestDays = null,
   awayRestDays = null,
   marketOdds = null,
@@ -296,6 +297,8 @@ export function generatePicks({
   }
 
   const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
+  const isCupMatch = /cup|copa|taça|pokal|coppa|friendl/i.test(leagueName);
+  const isDefensiveLeague = /serie a|primeira liga|portugal|italia/i.test(leagueName);
 
   const homeAvgGF = homeForm.total > 0 ? +(homeForm.goalsFor  / homeForm.total).toFixed(2) : 0;
   const homeAvgGA = homeForm.total > 0 ? +(homeForm.goalsAgainst / homeForm.total).toFixed(2) : 0;
@@ -390,10 +393,26 @@ export function generatePicks({
     awayMotivNote,
   ].filter(Boolean).join(', ');
 
+  const isHomeFortress = homeFormAtHome?.total >= 4 && homeFormAtHome?.losses === 0;
+  
+  const homeScoreAdv = homeForm.score - awayForm.score;
+  // Usa forma en casa del local con penalizaciones de lesión, cansancio y motivación aplicadas. Bonifica si es fortaleza.
+  let homeEffectiveScore = Math.max(
+    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score) - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty + (isHomeFortress ? 15 : 0), 0
+  );
+  let awayEffectiveScore = Math.max(
+    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score) - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty, 0
+  );
 
-  // Si no hay H2H, redistribuir el peso entre los dos equipos
-  const h2hWeight  = h2hData ? 0.25 : 0;
-  const teamWeight = h2hData ? 0.375 : 0.5;
+  // Penalización Anti-Copas: Si es partido de copa, la estadística del favorito no es confiable por rotaciones
+  if (isCupMatch) {
+    if (homeEffectiveScore > awayEffectiveScore) homeEffectiveScore -= 25;
+    else if (awayEffectiveScore > homeEffectiveScore) awayEffectiveScore -= 25;
+  }
+
+  // Ahora el H2H pesa mucho menos (10%) para priorizar la forma de la temporada actual
+  const h2hWeight  = h2hData ? 0.10 : 0;
+  const teamWeight = h2hData ? 0.45 : 0.5;
 
   // Helper to add a pick with calculated fair odds
   const addPick = (pick) => {
@@ -538,7 +557,9 @@ export function generatePicks({
   // Ahora usamos el dato real del H2H en lugar del proxy *1.2
   const h2hOver15Pct   = h2hData?.over15Pct ?? (h2hData ? Math.min(Math.round(h2hData.over25Pct * 1.2), 100) : 0);
   const combinedOver15 = Math.round(homeOver15Pct * teamWeight + awayOver15Pct * teamWeight + h2hOver15Pct * h2hWeight);
-  if (combinedOver15 >= 78 && projectedGoals >= 1.8) {
+  
+  const over15Threshold = isDefensiveLeague ? 2.3 : 1.8;
+  if (combinedOver15 >= 78 && projectedGoals >= over15Threshold) {
     const prob = Math.min(combinedOver15, 91);
     if (prob >= 78) {
       addPick({
@@ -553,7 +574,8 @@ export function generatePicks({
   }
 
   // ── Over 2.5 ──────────────────────────────────────────────────
-  if (combinedOver25 >= 70 && projectedGoals >= 2.5) {
+  const over25Threshold = isDefensiveLeague ? 2.7 : 2.5;
+  if (combinedOver25 >= 70 && projectedGoals >= over25Threshold) {
     const officialBoost = hasOfficial && officialWinner?.toLowerCase().includes('goals') ? 4 : 0;
     const prob = Math.min(combinedOver25 + officialBoost, 88);
     if (prob >= 75) {
@@ -638,14 +660,6 @@ export function generatePicks({
   }
 
   // ── Ganador: Local ─────────────────────────────────────────────
-  const homeScoreAdv = homeForm.score - awayForm.score;
-  // Usa forma en casa del local con penalizaciones de lesión, cansancio y motivación aplicadas
-  const homeEffectiveScore = Math.max(
-    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score) - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty, 0
-  );
-  const awayEffectiveScore = Math.max(
-    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score) - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty, 0
-  );
   const effectiveAdv = homeEffectiveScore - awayEffectiveScore;
 
   const officialHomeBoost = hasOfficial && officialHomeWinPct >= 55 ? Math.round((officialHomeWinPct - 50) * 0.2) : 0;
