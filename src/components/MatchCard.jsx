@@ -1,6 +1,24 @@
 import { useNavigate } from 'react-router-dom';
 import { Clock, ChevronRight, Tv } from 'lucide-react';
 
+// Tarjeta de árbitro (amarilla o roja) — mismo formato, distinto color
+function CardBadge({ color = 'red', count = 1, pulse = false }) {
+  const colors = {
+    red:    { bg: 'bg-red-600',    shadow: 'shadow-[0_0_8px_rgba(220,38,38,0.7)]' },
+    yellow: { bg: 'bg-yellow-400', shadow: 'shadow-[0_0_8px_rgba(250,204,21,0.7)]' },
+  };
+  const { bg, shadow } = colors[color] ?? colors.red;
+  return (
+    <div className={`relative w-[9px] h-[13px] ${bg} rounded-[2px] ${shadow} ${pulse ? 'animate-pulse' : ''} flex items-end justify-center pb-[1px]`}>
+      {count > 1 && (
+        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 text-[8px] font-black text-white leading-none">
+          {count}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function StatusBadge({ status, elapsed }) {
   if (status === '1H' || status === '2H' || status === 'ET') {
     return (
@@ -87,7 +105,7 @@ export default function MatchCard({ fixture, onClick }) {
           {(status === 'FT' || isLive) ? (
             <div className="flex items-center gap-2">
               {fixture.redCards?.home > 0 && (
-                <div className="w-2 h-3 bg-red-600 rounded-sm shadow-[0_0_8px_rgba(255,0,0,0.5)] animate-pulse" title="Tarjeta Roja" />
+                <CardBadge color="red" count={fixture.redCards.home} pulse={isLive} />
               )}
               <span className={`text-2xl font-bold font-mono tabular-nums ${isLive ? 'text-white' : 'text-slate-300'}`}>
                 {goals?.home ?? 0}
@@ -97,7 +115,7 @@ export default function MatchCard({ fixture, onClick }) {
                 {goals?.away ?? 0}
               </span>
               {fixture.redCards?.away > 0 && (
-                <div className="w-2 h-3 bg-red-600 rounded-sm shadow-[0_0_8px_rgba(255,0,0,0.5)] animate-pulse" title="Tarjeta Roja" />
+                <CardBadge color="red" count={fixture.redCards.away} pulse={isLive} />
               )}
             </div>
           ) : (

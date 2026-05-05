@@ -696,15 +696,27 @@ export default function Analysis() {
             {(fixture?.fixture?.status?.short !== 'NS' || fixture?.goals?.home > 0 || fixture?.goals?.away > 0) ? (
               <div className="flex flex-col items-center animate-in fade-in zoom-in duration-500">
                 <div className="flex items-center gap-4">
-                  <div className="text-5xl font-black text-white font-mono bg-surface-900/80 px-6 py-4 rounded-2xl border-2 border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center justify-center min-w-[140px] tracking-tighter relative">
+                  <div className="text-5xl font-black text-white font-mono bg-surface-900/80 px-6 py-4 rounded-2xl border-2 border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center justify-center min-w-[140px] tracking-tighter gap-3">
                     {fixture.redCards?.home > 0 && (
-                      <div className="absolute -left-6 w-3 h-5 bg-red-600 rounded-sm shadow-[0_0_15px_rgba(255,0,0,0.6)] animate-pulse" title={`${fixture.redCards.home} Tarjeta(s) Roja(s)`} />
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-[11px] h-[16px] bg-red-600 rounded-[2px] shadow-[0_0_10px_rgba(220,38,38,0.7)]"
+                          style={isLiveMatch ? { animation: 'pulse 1.5s infinite' } : {}} />
+                        {fixture.redCards.home > 1 && (
+                          <span className="text-[10px] font-black text-red-400 leading-none">{fixture.redCards.home}</span>
+                        )}
+                      </div>
                     )}
                     <span className="text-accent-green">{fixture.goals?.home ?? 0}</span>
-                    <span className="mx-2 text-slate-700 opacity-50">-</span>
+                    <span className="text-slate-700 opacity-50">-</span>
                     <span className="text-accent-green">{fixture.goals?.away ?? 0}</span>
                     {fixture.redCards?.away > 0 && (
-                      <div className="absolute -right-6 w-3 h-5 bg-red-600 rounded-sm shadow-[0_0_15px_rgba(255,0,0,0.6)] animate-pulse" title={`${fixture.redCards.away} Tarjeta(s) Roja(s)`} />
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-[11px] h-[16px] bg-red-600 rounded-[2px] shadow-[0_0_10px_rgba(220,38,38,0.7)]"
+                          style={isLiveMatch ? { animation: 'pulse 1.5s infinite' } : {}} />
+                        {fixture.redCards.away > 1 && (
+                          <span className="text-[10px] font-black text-red-400 leading-none">{fixture.redCards.away}</span>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
