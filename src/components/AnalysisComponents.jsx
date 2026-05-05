@@ -1,21 +1,19 @@
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 /**
  * Displays W/D/L form string as colored pills
- * form: array of matches newest-first
  */
 function FormPills({ matches, teamId }) {
   const [activeIndex, setActiveIndex] = useState(null);
 
-  if (!matches || matches.length === 0) return <span className="text-slate-600 text-xs">Sin datos</span>;
+  if (!matches || matches.length === 0)
+    return <span className="text-slate-600 text-xs">Sin datos</span>;
 
-  const validMatches = matches.slice(0, 15).reverse();
+  const validMatches = matches.slice(0, 12).reverse();
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1 flex-wrap">
+      <div className="flex items-center gap-1.5 flex-wrap">
         {validMatches.map((m, i) => {
           const isHome  = String(m.teams?.home?.id) === String(teamId);
           const winner  = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
@@ -25,18 +23,17 @@ function FormPills({ matches, teamId }) {
 
           const colorMap = { W: 'bg-accent-green text-surface-900', D: 'bg-amber-400 text-surface-900', L: 'bg-accent-red text-white' };
           const labelMap = { W: 'G', D: 'E', L: 'P' };
-          
+
           return (
             <button key={i}
               onClick={() => setActiveIndex(activeIndex === i ? null : i)}
-              className={`w-6 h-6 rounded flex items-center justify-center text-[11px] font-bold transition-all ${colorMap[result]} ${activeIndex === i ? 'ring-2 ring-white scale-110' : 'opacity-90 hover:opacity-100 hover:scale-105'}`}>
+              className={`w-9 h-9 rounded-md flex items-center justify-center text-[15px] font-black transition-all ${colorMap[result]} ${activeIndex === i ? 'ring-2 ring-white scale-110' : 'opacity-90 hover:opacity-100 hover:scale-105 shadow-sm'}`}>
               {labelMap[result]}
             </button>
           );
         })}
       </div>
 
-      {/* Ventanita de detalles */}
       {activeIndex !== null && (
         <div className="bg-black/40 border border-white/10 rounded-lg p-3 text-sm animate-in fade-in slide-in-from-top-3 zoom-in-95 duration-300 ease-out origin-top shadow-xl">
           {(() => {
@@ -45,14 +42,12 @@ function FormPills({ matches, teamId }) {
             const hg      = m.goals?.home ?? 0;
             const ag      = m.goals?.away ?? 0;
             const oppName = isHome ? m.teams?.away?.name : m.teams?.home?.name;
-            
             const winner  = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
             let result = 'D';
             if ((isHome && winner === 'home') || (!isHome && winner === 'away')) result = 'W';
             if ((isHome && winner === 'away') || (!isHome && winner === 'home')) result = 'L';
             const resultLabel = result === 'W' ? 'Ganó' : result === 'D' ? 'Empató' : 'Perdió';
             const color = result === 'W' ? 'text-accent-green' : result === 'D' ? 'text-amber-400' : 'text-accent-red';
-
             const date = m.fixture?.date ? new Date(m.fixture.date).toLocaleDateString('es-PE', { day:'2-digit', month:'long' }) : '';
 
             return (
@@ -80,11 +75,11 @@ function FormPills({ matches, teamId }) {
  */
 function StatRow({ label, value, sub, color = 'text-white' }) {
   return (
-    <div className="flex items-baseline justify-between py-1.5 border-b border-white/5 last:border-0">
-      <span className="text-xs text-slate-500">{label}</span>
+    <div className="flex items-baseline justify-between py-1.5 border-b border-white/5 last:border-0 overflow-hidden">
+      <span className="text-xs text-slate-400">{label}</span>
       <div className="text-right">
-        <span className={`text-sm font-semibold font-mono ${color}`}>{value}</span>
-        {sub && <span className="text-xs text-slate-600 ml-1">{sub}</span>}
+        <span className={`text-sm font-bold font-mono ${color}`}>{value}</span>
+        {sub && <span className="text-[10px] text-slate-500 ml-1.5">{sub}</span>}
       </div>
     </div>
   );
@@ -94,24 +89,24 @@ function StatRow({ label, value, sub, color = 'text-white' }) {
  * Circular probability gauge
  */
 function ProbCircle({ prob, label, color = '#00ff88' }) {
-  const r    = 28;
+  const r    = 42; 
   const circ = 2 * Math.PI * r;
   const dash = circ * (1 - prob / 100);
 
   return (
-    <div className="flex flex-col items-center gap-1.5">
-      <svg width="72" height="72" viewBox="0 0 72 72">
-        <circle cx="36" cy="36" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="5" />
-        <circle cx="36" cy="36" r={r} fill="none" stroke={color} strokeWidth="5"
+    <div className="flex flex-col items-center gap-3">
+      <svg width="100" height="100" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="8" />
+        <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="8"
           strokeDasharray={circ} strokeDashoffset={dash}
           strokeLinecap="round"
           style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%', transition: 'stroke-dashoffset 1s ease' }}
         />
-        <text x="36" y="41" textAnchor="middle" fontSize="14" fontWeight="700" fill="white" fontFamily="JetBrains Mono,monospace">
+        <text x="50" y="58" textAnchor="middle" fontSize="26" fontWeight="900" fill="white" fontFamily="JetBrains Mono,monospace">
           {prob}%
         </text>
       </svg>
-      <span className="text-[10px] text-slate-500 text-center leading-tight max-w-[64px]">{label}</span>
+      <span className="text-sm font-bold text-slate-400 text-center leading-tight">{label}</span>
     </div>
   );
 }
@@ -122,7 +117,7 @@ function ProbCircle({ prob, label, color = '#00ff88' }) {
 function GoalTimeline({ slots, color = '#00ff88', actualGoals = 0 }) {
   const half1 = slots.slice(0, 3);
   const half2 = slots.slice(3, 6);
-  const totalMatchGoals = slots.reduce((a, s) => a + s.goals, 0);
+  const totalMatchGoals    = slots.reduce((a, s) => a + s.goals, 0);
   const totalMatchConceded = slots.reduce((a, s) => a + s.conceded, 0);
 
   const isMissingData = (actualGoals > 0 && totalMatchGoals === 0) || (actualGoals > 0 && (totalMatchGoals / actualGoals) < 0.30);
@@ -143,37 +138,31 @@ function GoalTimeline({ slots, color = '#00ff88', actualGoals = 0 }) {
     return (
       <div key={slot.key} className="flex items-center py-2 border-b border-white/5 last:border-0">
         <span className="w-12 text-[10px] text-slate-500 font-mono">{slot.label}</span>
-        
         <div className="flex-1 flex items-center justify-center gap-3">
-           {/* Anotados (Izquierda) */}
-           <div className="flex-1 flex items-center justify-end gap-2">
-             <span className="text-[11px] font-bold text-slate-300">{slot.goals > 0 ? slot.goals : '-'}</span>
-             <div className="w-10 sm:w-16 h-[3px] bg-transparent flex justify-end items-center">
-                {slot.goals > 0 && <div className="h-full bg-accent-green rounded-full opacity-80" style={{ width: `${gWidth}%` }}></div>}
-             </div>
-           </div>
-           
-           <div className="w-[1px] h-3 bg-white/10"></div>
-           
-           {/* Recibidos (Derecha) */}
-           <div className="flex-1 flex items-center justify-start gap-2">
-             <div className="w-10 sm:w-16 h-[3px] bg-transparent flex justify-start items-center">
-                {slot.conceded > 0 && <div className="h-full bg-accent-red rounded-full opacity-80" style={{ width: `${cWidth}%` }}></div>}
-             </div>
-             <span className="text-[11px] font-bold text-slate-300">{slot.conceded > 0 ? slot.conceded : '-'}</span>
-           </div>
+          <div className="flex-1 flex items-center justify-end gap-2">
+            <span className="text-[11px] font-bold text-slate-300">{slot.goals > 0 ? slot.goals : '-'}</span>
+            <div className="w-10 sm:w-16 h-[3px] bg-transparent flex justify-end items-center">
+              {slot.goals > 0 && <div className="h-full bg-accent-green rounded-full opacity-80" style={{ width: `${gWidth}%` }}></div>}
+            </div>
+          </div>
+          <div className="w-[1px] h-3 bg-white/10"></div>
+          <div className="flex-1 flex items-center justify-start gap-2">
+            <div className="w-10 sm:w-16 h-[3px] bg-transparent flex justify-start items-center">
+              {slot.conceded > 0 && <div className="h-full bg-accent-red rounded-full opacity-80" style={{ width: `${cWidth}%` }}></div>}
+            </div>
+            <span className="text-[11px] font-bold text-slate-300">{slot.conceded > 0 ? slot.conceded : '-'}</span>
+          </div>
         </div>
       </div>
     );
   };
 
   const renderHalf = (title, halfSlots) => {
-    const totalGoals = halfSlots.reduce((a, s) => a + s.goals, 0);
+    const totalGoals    = halfSlots.reduce((a, s) => a + s.goals, 0);
     const totalConceded = halfSlots.reduce((a, s) => a + s.conceded, 0);
-    
-    const goalsPct = totalMatchGoals > 0 ? Math.round((totalGoals / totalMatchGoals) * 100) : 0;
+    const goalsPct    = totalMatchGoals    > 0 ? Math.round((totalGoals    / totalMatchGoals)    * 100) : 0;
     const concededPct = totalMatchConceded > 0 ? Math.round((totalConceded / totalMatchConceded) * 100) : 0;
-    
+
     return (
       <div className="mb-5">
         <div className="flex flex-col mb-2 px-1">
@@ -212,57 +201,94 @@ function H2HTable({ matches, homeId, awayId, homeName, awayName }) {
     return <p className="text-xs text-slate-600 text-center py-4">Sin historial H2H disponible</p>;
 
   return (
-    <div className="overflow-x-auto">
-      <table className="data-table min-w-full">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th>Local</th>
-            <th className="text-center">Resultado</th>
-            <th>Visitante</th>
-          </tr>
-        </thead>
-        <tbody>
-          {matches.slice(0, 8).map((m, i) => {
-            const hg = m.goals?.home ?? 0;
-            const ag = m.goals?.away ?? 0;
-            const date = m.fixture?.date ? new Date(m.fixture.date).toLocaleDateString('es-PE', { day:'2-digit', month:'short', year:'2-digit' }) : '–';
-            const winner = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
+    <div className="space-y-1.5">
+      {/* Header */}
+      <div className="grid items-center text-[9px] font-black uppercase tracking-widest text-slate-600 px-2 mb-2"
+        style={{ gridTemplateColumns: '52px 1fr auto 1fr' }}>
+        <span>Fecha</span>
+        <span className="text-right pr-3">Local</span>
+        <span className="text-center w-16">Marcador</span>
+        <span className="text-left pl-3">Visitante</span>
+      </div>
 
-            return (
-              <tr key={i}>
-                <td className="text-xs text-slate-500">{date}</td>
-                <td className="text-xs text-slate-300">{m.teams?.home?.name}</td>
-                <td className="text-center font-mono text-sm font-semibold text-white">{hg} – {ag}</td>
-                <td className="text-xs text-slate-300">{m.teams?.away?.name}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {matches.slice(0, 8).map((m, i) => {
+        const hg  = m.goals?.home ?? 0;
+        const ag  = m.goals?.away ?? 0;
+        const homeWon = hg > ag;
+        const awayWon = ag > hg;
+        const date = m.fixture?.date
+          ? new Date(m.fixture.date).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' })
+          : '–';
+
+        return (
+          <div key={i}
+            className="grid items-center py-2 px-2 rounded-lg border border-white/5 bg-white/[0.015] hover:bg-white/[0.03] transition-colors"
+            style={{ gridTemplateColumns: '52px 1fr auto 1fr' }}>
+
+            {/* Fecha */}
+            <span className="text-[10px] text-slate-600 font-mono shrink-0">{date}</span>
+
+            {/* Local */}
+            <span className={`text-[11px] font-semibold text-right pr-3 truncate ${homeWon ? 'text-accent-green' : 'text-slate-400'}`}>
+              {m.teams?.home?.name}
+            </span>
+
+            {/* Marcador */}
+            <div className="flex items-center justify-center gap-1 w-16">
+              <span className={`text-sm font-black font-mono ${homeWon ? 'text-accent-green' : 'text-slate-300'}`}>{hg}</span>
+              <span className="text-slate-700 font-bold">–</span>
+              <span className={`text-sm font-black font-mono ${awayWon ? 'text-accent-green' : 'text-slate-300'}`}>{ag}</span>
+            </div>
+
+            {/* Visitante */}
+            <span className={`text-[11px] font-semibold text-left pl-3 truncate ${awayWon ? 'text-accent-green' : 'text-slate-400'}`}>
+              {m.teams?.away?.name}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 /**
- * Picks table - the main output
+ * PicksTable — tabs (Pre-Partido / En Vivo) + compact aesthetic cards
  */
-function PicksTable({ picks, reason, onSavePick }) {
+function PicksTable({ picks, reason, onSavePick, isLive }) {
   if (!picks || picks.length === 0) {
     return (
       <div className="text-center py-8">
         <div className="text-3xl mb-3">🚫</div>
-        <p className="text-sm font-semibold text-slate-300 mb-1">Sin picks recomendados</p>
+        <p className="text-sm font-semibold text-slate-300 mb-1">Sin apuestas recomendadas</p>
         <p className="text-xs text-slate-500 max-w-xs mx-auto">{reason || 'No se encontró ventaja estadística suficiente.'}</p>
       </div>
     );
   }
 
-  const isLivePick = (market) => market.toLowerCase().includes('vivo') || market.toLowerCase().includes('live');
-  
-  const preMatchPicks = picks.filter(p => !isLivePick(p.market));
-  const livePicks = picks.filter(p => isLivePick(p.market));
+  const isLivePick = (market) =>
+    market.toLowerCase().includes('vivo') || market.toLowerCase().includes('live');
 
+  const preMatchPicks = picks.filter(p => !isLivePick(p.market));
+  const livePicks     = picks.filter(p =>  isLivePick(p.market));
+
+  // Si el partido está en vivo y hay picks en vivo → activar tab live.
+  // Si el partido no ha comenzado → siempre mostrar pre-partido primero.
+  const [activeTab, setActiveTab] = useState(() => {
+    if (isLive && livePicks.length > 0) return 'live';
+    return 'pre';
+  });
+
+  // Auto-switch a live tab solo cuando el partido pasa a estado en vivo
+  useEffect(() => {
+    if (isLive && livePicks.length > 0) {
+      setActiveTab('live');
+    } else if (!isLive) {
+      setActiveTab('pre');
+    }
+  }, [isLive, livePicks.length]);
+
+
+  /* ── Individual Pick Card ── */
   const PickCard = ({ pick }) => {
     const [saved, setSaved] = useState(false);
 
@@ -274,92 +300,146 @@ function PicksTable({ picks, reason, onSavePick }) {
       }
     };
 
-    return (
-      <div className="rounded-xl p-4 border transition-all duration-300 relative overflow-hidden glass-card group"
-      style={{
-        background: pick.probability >= 85
-          ? 'linear-gradient(135deg,rgba(0,255,136,0.08),rgba(0,204,106,0.02))'
-          : pick.probability >= 75
-          ? 'linear-gradient(135deg,rgba(30,144,255,0.08),rgba(30,144,255,0.02))'
-          : 'linear-gradient(135deg,rgba(255,165,0,0.08),rgba(255,165,0,0.02))',
-        borderColor: pick.probability >= 85
-          ? 'rgba(0,255,136,0.25)'
-          : pick.probability >= 75
-          ? 'rgba(30,144,255,0.2)'
-          : 'rgba(255,165,0,0.2)',
-      }}>
-      {/* Indicador de color lateral */}
-      <div className="absolute top-0 left-0 w-1 h-full" style={{
-        background: pick.probability >= 85 ? '#00ff88' : pick.probability >= 75 ? '#1e90ff' : '#ffa500'
-      }} />
+    const accent =
+      pick.probability >= 85
+        ? { color: '#00ff88', bg: 'rgba(0,255,136,0.06)', border: 'rgba(0,255,136,0.18)' }
+        : pick.probability >= 75
+        ? { color: '#3b9eff', bg: 'rgba(59,158,255,0.06)', border: 'rgba(59,158,255,0.18)' }
+        : { color: '#f59e0b', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.18)' };
 
-      <div className="flex items-start justify-between gap-3 mb-2 pl-2">
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-lg">{pick.tier}</span>
-            <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">{pick.market}</span>
+    return (
+      <div
+        className="relative rounded-lg border overflow-hidden flex items-stretch group transition-all duration-200 hover:brightness-110 min-h-[110px]"
+        style={{ background: accent.bg, borderColor: accent.border }}
+      >
+        {/* Saved flash */}
+        {saved && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-lg z-20 animate-in fade-in zoom-in duration-150">
+            <span className="text-xl">✅</span>
           </div>
-          <p className="font-bold text-white text-[15px] leading-tight">{pick.selection}</p>
-        </div>
-        <div className="text-right shrink-0 flex flex-col items-end">
-          <p className="text-2xl font-bold font-mono leading-none"
-            style={{ color: pick.probability >= 85 ? '#00ff88' : pick.probability >= 75 ? '#1e90ff' : '#ffa500' }}>
-            {pick.probability}%
-          </p>
-          {pick.odds && (
-            <span className="text-[11px] font-mono bg-slate-800 text-slate-200 px-2 py-0.5 rounded border border-slate-700 mt-1.5 shadow-sm">
-              Cuota @{pick.odds}
-            </span>
-          )}
-        </div>
-      </div>
-      <p className="text-xs text-slate-400 leading-relaxed border-t border-white/10 pt-2.5 mt-2 pl-2">{pick.argument}</p>
-      <div className="flex items-center justify-between mt-3 pl-2">
-        <span className={`text-[9px] px-2 py-0.5 rounded uppercase font-bold tracking-wide ${pick.risk === 'Bajo' ? 'badge-green' : pick.risk === 'Moderado' ? 'badge-yellow' : 'badge-red'}`}>
-          Riesgo {pick.risk}
-        </span>
-        
-        <button 
-          onClick={handleSave}
-          disabled={saved}
-          className={`flex items-center gap-1.5 text-[11px] px-4 py-1.5 rounded-full border font-bold transition-all transform active:scale-95 ${
-            saved 
-              ? 'bg-accent-green/20 border-accent-green text-accent-green shadow-[0_0_10px_rgba(0,255,136,0.2)]' 
-              : 'bg-gradient-to-r from-accent-green to-emerald-600 border-transparent text-surface-900 hover:shadow-[0_0_15px_rgba(0,255,136,0.3)] hover:-translate-y-0.5'
-          }`}
+        )}
+
+        {/* Left: big % block */}
+        <div
+          className="flex flex-col items-center justify-center px-4 py-5 shrink-0 min-w-[100px]"
+          style={{ background: `${accent.color}14`, borderRight: `1px solid ${accent.border}` }}
         >
-          {saved ? '✅ Guardado' : '🎯 Guardar Pronóstico'}
-        </button>
+          <span
+            className="text-[44px] font-black font-mono leading-none tabular-nums tracking-tighter"
+            style={{
+              color: accent.color,
+              textShadow: `0 0 20px ${accent.color}80`,
+            }}
+          >
+            {pick.probability}%
+          </span>
+          <span className="text-[14px] font-bold uppercase tracking-widest mt-1.5"
+            style={{ color: `${accent.color}90` }}>
+            {pick.tier}
+          </span>
+        </div>
+
+        {/* Right: content */}
+        <div className="flex flex-col justify-between flex-1 px-5 py-5 gap-2">
+          {/* Market pill */}
+          <span
+            className="text-[11px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full self-start leading-none mb-1"
+            style={{ color: accent.color, background: `${accent.color}18` }}
+          >
+            {pick.market}
+          </span>
+
+          {/* Selection — the main text, big and bold */}
+          <div>
+            <p className="text-[22px] font-black text-white leading-tight">{pick.selection}</p>
+            {pick.argument && (
+              <p className="text-[15px] text-slate-300 leading-snug line-clamp-3 mt-2">{pick.argument}</p>
+            )}
+          </div>
+
+          {/* Bottom row */}
+          <div className="flex items-center justify-between gap-1 mt-3">
+            <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${
+              pick.risk === 'Bajo' ? 'bg-accent-green/15 text-accent-green'
+              : pick.risk === 'Moderado' ? 'bg-amber-400/15 text-amber-400'
+              : 'bg-red-500/15 text-red-400'
+            }`}>{pick.risk}</span>
+            
+            {saved ? (
+              <span className="text-[11px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest text-surface-900 bg-accent-green flex items-center gap-1 shadow-[0_0_10px_rgba(0,255,136,0.5)]">
+                ✓ Guardada
+              </span>
+            ) : (
+              <button 
+                onClick={handleSave}
+                className="text-[11px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest transition-colors duration-200 border cursor-pointer"
+                style={{ 
+                  color: accent.color, 
+                  background: `${accent.color}15`,
+                  borderColor: `${accent.color}40`,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = accent.color;
+                  e.currentTarget.style.color = '#000';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = `${accent.color}15`;
+                  e.currentTarget.style.color = accent.color;
+                }}
+              >
+                Guardar Apuesta
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-    </div>
     );
   };
 
+  /* ── Tab switcher ── */
   return (
-    <div className="space-y-6">
-      {preMatchPicks.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent-green"></span>
-            Apuestas Pre-Partido
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {preMatchPicks.map((pick, i) => <PickCard key={`pre-${i}`} pick={pick} />)}
-          </div>
+    <div className="space-y-3">
+      {/* Pill-style tabs */}
+      <div className="flex gap-1 p-1 rounded-xl bg-white/5 border border-white/5">
+        {preMatchPicks.length > 0 && (
+          <button
+            onClick={() => setActiveTab('pre')}
+            className={`flex-1 text-[13px] font-bold py-2.5 px-3 rounded-[10px] uppercase tracking-widest transition-all duration-200 ${
+              activeTab === 'pre'
+                ? 'bg-accent-green text-surface-900 shadow'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            ⚽ Pre-Partido
+          </button>
+        )}
+        {livePicks.length > 0 && (
+          <button
+            onClick={() => setActiveTab('live')}
+            className={`flex-1 text-[13px] font-bold py-2.5 px-3 rounded-[10px] uppercase tracking-widest transition-all duration-200 ${
+              activeTab === 'live'
+                ? 'bg-amber-500 text-surface-900 shadow'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            🔴 En Vivo
+          </button>
+        )}
+      </div>
+
+      {/* Cards grid */}
+      {activeTab === 'pre' && preMatchPicks.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {preMatchPicks.map((pick, i) => <PickCard key={`pre-${i}`} pick={pick} />)}
+        </div>
+      )}
+      {activeTab === 'live' && livePicks.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {livePicks.map((pick, i) => <PickCard key={`live-${i}`} pick={pick} />)}
         </div>
       )}
 
-      {livePicks.length > 0 && (
-        <div className="space-y-3 relative">
-          <h3 className="text-[11px] font-bold text-[#ffa500] uppercase tracking-widest flex items-center gap-2 mt-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#ffa500] animate-pulse"></span>
-            Estrategia en Vivo
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {livePicks.map((pick, i) => <PickCard key={`live-${i}`} pick={pick} />)}
-          </div>
-        </div>
-      )}
+      <p className="text-[9px] text-slate-600 text-center">Toca una tarjeta para guardarla</p>
     </div>
   );
 }
@@ -369,17 +449,15 @@ function RecentMatchesList({ matches, teamId }) {
   return (
     <div className="mt-2 space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
       {matches.slice(0, 10).map((m, i) => {
-        const isHome = String(m.teams?.home?.id) === String(teamId);
-        const hg = m.goals?.home ?? 0;
-        const ag = m.goals?.away ?? 0;
+        const isHome  = String(m.teams?.home?.id) === String(teamId);
+        const hg      = m.goals?.home ?? 0;
+        const ag      = m.goals?.away ?? 0;
         const oppName = isHome ? m.teams?.away?.name : m.teams?.home?.name;
-        
-        const winner = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
+        const winner  = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
         let result = 'D';
         if ((isHome && winner === 'home') || (!isHome && winner === 'away')) result = 'W';
         if ((isHome && winner === 'away') || (!isHome && winner === 'home')) result = 'L';
-        
-        const icon = result === 'W' ? '✅' : result === 'D' ? '➖' : '❌';
+        const icon  = result === 'W' ? '✅' : result === 'D' ? '➖' : '❌';
         const color = result === 'W' ? 'text-accent-green' : result === 'D' ? 'text-slate-400' : 'text-accent-red';
         const label = result === 'W' ? 'Ganó' : result === 'D' ? 'Empató' : 'Perdió';
 

@@ -99,3 +99,143 @@ export async function clearBackendCache() {
     return false;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 8. AUTENTICACIÓN Y ADMINISTRACIÓN DE USUARIOS
+// ─────────────────────────────────────────────────────────────────────
+export async function loginUser(username, password) {
+  try {
+    const res = await backend.post('/api/auth/login', { username, password });
+    if (res.data.token) {
+      sessionStorage.setItem('chalaca_token', res.data.token);
+      sessionStorage.setItem('chalaca_user', JSON.stringify(res.data.user));
+      return { success: true, user: res.data.user };
+    }
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function loginWithGoogle(access_token) {
+  try {
+    const res = await backend.post('/api/auth/google', { access_token });
+    if (res.data.token) {
+      sessionStorage.setItem('chalaca_token', res.data.token);
+      sessionStorage.setItem('chalaca_user', JSON.stringify(res.data.user));
+      return { success: true, user: res.data.user };
+    }
+    return { success: false, error: 'No se recibió token' };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function logoutUser() {
+  sessionStorage.clear(); // Limpiar todo lo nuestro
+  
+  // Limpiar llaves de Supabase en localStorage por la fuerza para evitar que
+  // recupere la sesión si signOut() falla o es muy lento.
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('sb-')) {
+      localStorage.removeItem(key);
+    }
+  });
+
+  try {
+    const { supabase } = await import('../lib/supabaseClient');
+    await supabase.auth.signOut();
+  } catch (e) {
+    console.error('Error cerrando sesión en Supabase', e);
+  }
+}
+
+
+
+export async function registerUser(username, password) {
+  try {
+    const res = await backend.post('/api/auth/register', { username, password });
+    return { success: res.data.success, message: res.data.message };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export function getAuthHeaders() {
+  const token = sessionStorage.getItem('chalaca_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export async function fetchAdminUsers() {
+  try {
+    const res = await backend.get('/api/admin/users', { headers: getAuthHeaders() });
+    return { success: true, users: res.data };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function deleteUser(userId) {
+  try {
+    const res = await backend.delete(`/api/admin/users/${userId}`, { headers: getAuthHeaders() });
+    return { success: res.data.success };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function forceResetPassword(userId, newPassword) {
+  try {
+    const res = await backend.put(`/api/admin/users/${userId}/password`, { password: newPassword }, { headers: getAuthHeaders() });
+    return { success: res.data.success, message: res.data.message };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 9. GESTIÓN DE PICKS (APUESTAS) EN BD
+// ─────────────────────────────────────────────────────────────────────
+export async function getDbPicks() {
+  try {
+    const res = await backend.get('/api/picks', { headers: getAuthHeaders() });
+    return { success: true, picks: res.data };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function saveDbPick(pickData) {
+  try {
+    const res = await backend.post('/api/picks', pickData, { headers: getAuthHeaders() });
+    return { success: res.data.success, id: res.data.id };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function updateDbPick(pickId, updatedData) {
+  try {
+    const res = await backend.put(`/api/picks/${pickId}`, updatedData, { headers: getAuthHeaders() });
+    return { success: res.data.success };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function deleteDbPick(pickId) {
+  try {
+    const res = await backend.delete(`/api/picks/${pickId}`, { headers: getAuthHeaders() });
+    return { success: res.data.success };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}
+
+export async function clearAllDbPicks() {
+  try {
+    const res = await backend.delete('/api/picks', { headers: getAuthHeaders() });
+    return { success: res.data.success };
+  } catch (err) {
+    return { success: false, error: err.response?.data?.error || err.message };
+  }
+}

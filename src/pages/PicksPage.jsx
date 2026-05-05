@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TrendingUp, Trash2, BarChart2, Calendar, ChevronRight, CheckCircle2, XCircle, Clock, Target, Info } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import PendingWall from '../components/PendingWall';
+
+import { getDbPicks, updateDbPick, deleteDbPick, clearAllDbPicks } from '../services/backendApi';
 
 function ProbBadge({ prob }) {
   const color = prob >= 85 ? '#00ff88' : '#1e90ff';
@@ -12,62 +15,81 @@ function ProbBadge({ prob }) {
 
 export default function PicksPage() {
   const navigate = useNavigate();
+  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
   const { picks, setPicks } = useApp();
   const [loaded, setLoaded] = useState([]);
 
   useEffect(() => {
-    const stored = localStorage.getItem('tipster_picks');
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      setPicks(parsed);
+    async function fetchPicks() {
+      const res = await getDbPicks();
+      if (res.success && res.picks) {
+        setPicks(res.picks);
+      }
     }
-  }, []);
+    fetchPicks();
+  }, [setPicks]);
 
   useEffect(() => {
     setLoaded(picks);
   }, [picks]);
 
   // Actualizar estado de un pick específico
-  const updatePickStatus = (entryId, pickIndex, status) => {
-    const updated = picks.map(entry => {
-      if (entry.id === entryId) {
-        const newPicks = [...entry.picks];
-        newPicks[pickIndex] = { ...newPicks[pickIndex], status };
-        return { ...entry, picks: newPicks };
-      }
-      return entry;
-    });
-    setPicks(updated);
-    localStorage.setItem('tipster_picks', JSON.stringify(updated));
+  const updatePickStatus = async (entryId, pickIndex, status) => {
+    const entryToUpdate = picks.find(e => e.id === entryId);
+    if (!entryToUpdate) return;
+    
+    const newPicks = [...entryToUpdate.picks];
+    newPicks[pickIndex] = { ...newPicks[pickIndex], status };
+    const updatedEntry = { ...entryToUpdate, picks: newPicks };
+    
+    const updatedState = picks.map(entry => entry.id === entryId ? updatedEntry : entry);
+    setPicks(updatedState);
+    
+    await updateDbPick(entryId, updatedEntry);
   };
 
-  const deleteEntry = (id) => {
+  const deleteEntry = async (id) => {
     const updated = picks.filter(p => p.id !== id);
     setPicks(updated);
-    localStorage.setItem('tipster_picks', JSON.stringify(updated));
+    await deleteDbPick(id);
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
     if (window.confirm('¿Estás seguro de borrar todo el historial?')) {
       setPicks([]);
-      localStorage.removeItem('tipster_picks');
+      await clearAllDbPicks();
     }
   };
 
   // Cálculos estadísticos
   const stats = useMemo(() => {
     let total = 0, won = 0, lost = 0, pending = 0;
+    let streak = 0, bestStreak = 0, currentStreak = 0, currentStreakType = null;
+
+    // Flatten all picks ordered by savedAt
+    const allPicks = [];
     loaded.forEach(entry => {
       entry.picks?.forEach(p => {
+        allPicks.push({ ...p, savedAt: entry.savedAt || entry.date });
         total++;
         if (p.status === 'WON') won++;
         else if (p.status === 'LOST') lost++;
         else pending++;
       });
     });
-    const resolved = won + lost;
-    const winRate = resolved > 0 ? Math.round((won / resolved) * 100) : 0;
-    return { total, won, lost, pending, winRate };
+
+    // Calculate current streak from most recent resolved pick
+    const resolved = allPicks.filter(p => p.status === 'WON' || p.status === 'LOST');
+    for (let i = 0; i < resolved.length; i++) {
+      const s = resolved[i].status;
+      if (i === 0) { currentStreakType = s; currentStreak = 1; }
+      else if (resolved[i].status === currentStreakType) currentStreak++;
+      else break;
+    }
+
+    const resolvedCount = won + lost;
+    const winRate = resolvedCount > 0 ? Math.round((won / resolvedCount) * 100) : 0;
+    return { total, won, lost, pending, winRate, currentStreak, currentStreakType };
   }, [loaded]);
 
   // Agrupación por Mes y Día
@@ -85,6 +107,14 @@ export default function PicksPage() {
     return months;
   }, [loaded]);
 
+  if (user?.role === 'pending') {
+    return (
+      <div className="max-w-screen-md mx-auto px-4 py-8 mt-10">
+        <PendingWall />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 animate-fade-in space-y-8">
       
@@ -96,10 +126,23 @@ export default function PicksPage() {
             <span className="text-2xl font-black text-white">{stats.winRate}%</span>
             <span className="text-[10px] text-accent-green font-bold">W/R</span>
           </div>
+          {/* Bar de efectividad */}
+          <div className="mt-2 h-1.5 rounded-full bg-surface-700 overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${stats.winRate}%`,
+                background: stats.winRate >= 60
+                  ? 'linear-gradient(90deg,#00ff88,#00cc6a)'
+                  : stats.winRate >= 40
+                  ? 'linear-gradient(90deg,#f59e0b,#d97706)'
+                  : 'linear-gradient(90deg,#ff4757,#e03030)',
+              }} />
+          </div>
         </div>
         <div className="glass-card p-4 border-l-4 border-l-blue-500">
-          <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">Total Picks</p>
+          <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">Total Apuestas</p>
           <span className="text-2xl font-black text-white">{stats.total}</span>
+          <p className="text-[10px] text-slate-600 mt-1">{stats.pending} pendientes</p>
         </div>
         <div className="glass-card p-4 border-l-4 border-l-accent-green/60">
           <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">Aciertos</p>
@@ -116,6 +159,30 @@ export default function PicksPage() {
           </div>
         </div>
       </div>
+
+      {/* Racha actual */}
+      {stats.currentStreak > 1 && (
+        <div className="glass-card p-4 flex items-center gap-4"
+          style={{
+            borderColor: stats.currentStreakType === 'WON' ? 'rgba(0,255,136,0.2)' : 'rgba(255,71,87,0.2)',
+            background: stats.currentStreakType === 'WON' ? 'rgba(0,255,136,0.04)' : 'rgba(255,71,87,0.04)',
+          }}>
+          <div className="text-4xl font-black font-mono"
+            style={{ color: stats.currentStreakType === 'WON' ? '#00ff88' : '#ff4757' }}>
+            {stats.currentStreak}
+          </div>
+          <div>
+            <p className="text-sm font-bold text-white">
+              {stats.currentStreakType === 'WON' ? '🔥 Racha ganadora' : '⚠️ Racha perdedora'}
+            </p>
+            <p className="text-xs text-slate-500">
+              {stats.currentStreakType === 'WON'
+                ? 'Sigue el buen momento — mantén la disciplina.'
+                : 'Revisa tu estrategia — quizás bajar las unidades.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Header Interactivo */}
       <div className="flex items-center justify-between border-b border-white/5 pb-4">
@@ -140,7 +207,7 @@ export default function PicksPage() {
         <div className="text-center py-20 glass-card">
           <BarChart2 size={40} className="text-slate-700 mx-auto mb-4" />
           <p className="text-slate-400 font-bold mb-1">Aún no tienes pronósticos guardados</p>
-          <p className="text-slate-600 text-xs mb-6">Analiza un partido y guarda tu primer pick🎯</p>
+          <p className="text-slate-600 text-xs mb-6">Analiza un partido y guarda tu primera apuesta🎯</p>
           <button onClick={() => navigate('/')} className="btn-primary mx-auto">Explorar Partidos</button>
         </div>
       )}

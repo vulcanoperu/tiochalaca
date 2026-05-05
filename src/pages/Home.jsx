@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Filter, Search, AlertCircle, Trophy, ChevronLeft, ChevronRight } from 'lucide-react';
 import MatchCard from '../components/MatchCard';
 import Loader from '../components/Loader';
+import PendingWall from '../components/PendingWall';
 import { TOP_LEAGUES } from '../services/footballApi';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function Home() {
+  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
   const today = localDay();
   const [days]       = useState(() => buildDayStrip(new Date(), 3, 10));
   const [selected, setSelected]   = useState(today);
@@ -205,7 +207,7 @@ export default function Home() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 animate-fade-in">
+    <div className="max-w-screen-2xl mx-auto px-6 py-6 animate-fade-in">
 
       {/* ── Header ── */}
       <div className="mb-4">
@@ -338,7 +340,13 @@ export default function Home() {
       {/* ── Estados ── */}
       {loading && <Loader text={`Consultando partidos del ${selected}…`} />}
 
-      {!loading && error && (
+      {!loading && user?.role === 'pending' && (
+        <div className="mt-8">
+          <PendingWall />
+        </div>
+      )}
+
+      {!loading && user?.role !== 'pending' && error && (
         <div className="glass-card p-5 text-center" style={{ borderColor: 'rgba(255,71,87,0.15)' }}>
           <AlertCircle size={28} className="text-accent-red mx-auto mb-2" />
           <p className="text-accent-red text-sm font-semibold mb-3">{error}</p>
@@ -348,7 +356,7 @@ export default function Home() {
         </div>
       )}
 
-      {!loading && !error && filtered.length === 0 && (
+      {!loading && user?.role !== 'pending' && !error && filtered.length === 0 && (
         <div className="text-center py-20">
           <Trophy size={40} className="text-slate-700 mx-auto mb-3" />
           <p className="text-slate-400 font-semibold">Sin partidos para este día</p>
@@ -357,7 +365,7 @@ export default function Home() {
       )}
 
       {/* ── Secciones separadas ── */}
-      {!loading && !error && filtered.length > 0 && (
+      {!loading && user?.role !== 'pending' && !error && filtered.length > 0 && (
         <div className="space-y-10 animate-fade-in mt-4">
           
           {(activeTab === 'all' || activeTab === 'live') && liveGroups.length > 0 && (

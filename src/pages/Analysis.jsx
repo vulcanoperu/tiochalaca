@@ -2,24 +2,27 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, RefreshCw, AlertCircle, CheckCircle2,
-  Shield, Target, Clock, BarChart2, Users, Zap, Activity
+  Shield, Target, Clock, BarChart2, Users, Zap, Activity,
+  TrendingUp, AlertTriangle
 } from 'lucide-react';
 import Loader from '../components/Loader';
 import {
   FormPills, StatRow, ProbCircle, GoalTimeline, H2HTable, PicksTable, RecentMatchesList
 } from '../components/AnalysisComponents';
 import { useApp } from '../context/AppContext';
-import { Sparkles } from 'lucide-react';
 import {
   getTeamLastMatches, getH2H, getTeamStatistics,
   getFixtureStatistics, getFixtureEvents, getFixtures,
   getOfficialPrediction, getInjuries,
   TOP_LEAGUES,
 } from '../services/footballApi';
+import { getTeamFormFromBackend, getTeamXGFromBackend, getTeamInjuriesFromBackend, getH2HFromBackend, saveDbPick, getAuthHeaders } from '../services/backendApi';
 import {
   calculateFormScore, calculateOverUnder, analyzeGoalsByTimeSlot,
   analyzeH2H, generatePicks, calcMatchProbabilities, analyzeCards
 } from '../services/analysisEngine';
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 
 const SECTION = ({ icon: Icon, title, children, id }) => (
   <section id={id} className="glass-card p-5 animate-slide-up">
@@ -33,40 +36,6 @@ const SECTION = ({ icon: Icon, title, children, id }) => (
     {children}
   </section>
 );
-
-const AIBlock = ({ text, loading, title = "Análisis IA" }) => {
-  if (loading) return (
-    <div className="mt-4 p-5 rounded-2xl glass-card border border-white/5 animate-pulse">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-8 h-8 rounded-full bg-surface-800 flex items-center justify-center">
-          <Sparkles size={16} className="text-accent-green opacity-50" />
-        </div>
-        <div className="h-4 bg-surface-800 rounded w-1/3"></div>
-      </div>
-      <div className="space-y-3">
-         <div className="h-2 bg-white/5 rounded w-full"></div>
-         <div className="h-2 bg-white/5 rounded w-11/12"></div>
-      </div>
-    </div>
-  );
-  
-  if (!text || text === 'error') return null;
-
-  return (
-    <div className="mt-4 p-5 rounded-2xl glass-card border border-white/5 relative overflow-hidden group hover:border-accent-green/20 transition-colors">
-      <div className="absolute top-0 left-0 w-1 h-full bg-accent-green/30 group-hover:bg-accent-green transition-colors"></div>
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-8 h-8 rounded-lg bg-surface-800 flex items-center justify-center border border-white/5">
-          <Sparkles size={16} className="text-accent-green" />
-        </div>
-        <h3 className="text-[10px] font-bold text-slate-400 tracking-[0.2em] uppercase">{title}</h3>
-      </div>
-      <div className="text-sm text-slate-300 leading-relaxed pl-1">
-        {text}
-      </div>
-    </div>
-  );
-};
 
 export default function Analysis() {
   const { id: fixtureId } = useParams();
@@ -87,9 +56,8 @@ export default function Analysis() {
   const [analysis, setAnalysis]       = useState(null);
   const [picksResult, setPicksResult] = useState(null);
   const [pickSaved, setPickSaved]     = useState(false);
-  
-  const [aiSummary, setAiSummary]     = useState(null);
-  const [aiLoading, setAiLoading]     = useState(false);
+
+
 
   // ── Live clock (simple & bulletproof) ──────────────────────────────────
   // baseRef holds the ESPN-seeded baseline; timerRef holds the interval
@@ -149,12 +117,10 @@ export default function Analysis() {
     if (!fixtureId) return;
     setLoading(true);
     setError(null);
-    setAiSummary(null);
-    setAiLoading(false);
     try {
       // Fetch ESPN Summary with cache-busting to avoid browser caching
       const summaryRes = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
-      if (!summaryRes.ok) throw new Error('Error al obtener el partido desde ESPN');
+      if (!summaryRes.ok) throw new Error('Error al obtener el partido del proveedor de datos');
       const summary = await summaryRes.json();
 
       if (!summary.header) throw new Error('Partido no encontrado');
@@ -351,8 +317,31 @@ export default function Analysis() {
         return { avg, total, max, matches: cornersArr.length, over3, over4, over5 };
       };
 
+      const analyzeCardsFromSummaries = (summaries, teamIdStr) => {
+        const cardsArr = summaries.map(s => {
+           let count = 0;
+           (s.keyEvents || []).forEach(e => {
+             if (e.type?.text?.includes('Card') && String(e.team?.id) === String(teamIdStr)) {
+               count++;
+             }
+           });
+           return count;
+        });
+        if (!cardsArr.length) return null;
+        const total = cardsArr.reduce((a, b) => a + b, 0);
+        const avg = (total / cardsArr.length).toFixed(1);
+        // Cards lines are usually lower than corners, e.g. over 1.5, 2.5, 3.5 for a SINGLE team
+        const over1 = cardsArr.filter(c => c > 1).length;
+        const over2 = cardsArr.filter(c => c > 2).length;
+        const over3 = cardsArr.filter(c => c > 3).length;
+        const max = Math.max(...cardsArr);
+        return { avg, total, max, matches: cardsArr.length, over1, over2, over3 };
+      };
+
       const homeCornersAnalysis = analyzeCorners(homeHistSummaries, homeId);
       const awayCornersAnalysis = analyzeCorners(awayHistSummaries, awayId);
+      const homeCardsAnalysis = analyzeCardsFromSummaries(homeHistSummaries, homeId);
+      const awayCardsAnalysis = analyzeCardsFromSummaries(awayHistSummaries, awayId);
 
       // Map injuries (rosters / out)
       const inj = [];
@@ -384,12 +373,10 @@ export default function Analysis() {
       const awaySplit = calculateOverUnder(am, awayId);
       const h2hData   = analyzeH2H(h2h, homeId, awayId);
 
-      // Build goal timelines using historical events (not the current match events)
+      // Build goal timelines using historical events
       const homeSlots = analyzeGoalsByTimeSlot(homeHistEvs, homeId);
       const awaySlots = analyzeGoalsByTimeSlot(awayHistEvs, awayId);
-      
-      const homeCards = analyzeCards(homeHistEvs, homeId, Math.min(hm.length, 12));
-      const awayCards = analyzeCards(awayHistEvs, awayId, Math.min(am.length, 12));
+
 
       const poisson = calcMatchProbabilities(
         homeForm.goalsFor  / Math.max(homeForm.total, 1),
@@ -410,7 +397,7 @@ export default function Analysis() {
         isLive, liveClock, liveHomeGoals, liveAwayGoals
       });
 
-      setAnalysis({ homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCards, awayCards, homeCornersAnalysis, awayCornersAnalysis });
+      setAnalysis({ homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCardsAnalysis, awayCardsAnalysis, homeCornersAnalysis, awayCornersAnalysis });
       setPicksResult(picksRes);
     } catch (e) {
       console.error(e);
@@ -496,57 +483,11 @@ export default function Analysis() {
     return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   }, [isLiveMatch]); // only restarts when isLiveMatch changes
 
-  // Effect for fetching AI automatically when analysis is ready
-  useEffect(() => {
-    if (analysis && fixture && picksResult && !aiSummary && !aiLoading) {
-      setAiLoading(true);
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
-      fetch(`${backendUrl}/api/ai/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fixtureId,
-          homeName:   fixture.teams?.home?.name,
-          awayName:   fixture.teams?.away?.name,
-          leagueName: fixture.league?.name,
-          kickoff:    fixture.fixture?.date ? new Date(fixture.fixture.date).toLocaleString('es-PE') : '',
-          homeForm:   analysis.homeForm,
-          awayForm:   analysis.awayForm,
-          homeSplit:  analysis.homeSplit,
-          awaySplit:  analysis.awaySplit,
-          h2hData:    analysis.h2hData,
-          h2hMatches: h2hMatches.slice(0, 12),
-          poisson:    analysis.poisson,
-          injuries:   injuries,
-          picks:      picksResult.picks ?? [],
-          homeMatches: homeMatches.slice(0, 12),
-          awayMatches: awayMatches.slice(0, 12),
-        })
-      })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        if (data.data && typeof data.data === 'object') {
-          setAiSummary(data.data);
-        } else {
-          console.warn('AI no devolvió JSON válido', data);
-          setAiSummary({ error: true, message: 'Formato de respuesta inválido' });
-        }
-      })
-      .catch(err => {
-        console.error('Error IA:', err);
-        setAiSummary({ error: true, message: err.message });
-      })
-      .finally(() => setAiLoading(false));
-    }
-  }, [analysis, fixture, picksResult, aiSummary, aiLoading, fixtureId, h2hMatches, injuries, homeMatches, awayMatches]);
 
-  const saveIndividualPick = (pick) => {
+
+  const saveIndividualPick = async (pick) => {
     if (!pick || !fixture) return;
     const entry = {
-      id: Date.now() + Math.random(),
       fixtureId,
       home: fixture.teams?.home?.name,
       away: fixture.teams?.away?.name,
@@ -560,18 +501,24 @@ export default function Analysis() {
       savedAt: new Date().toISOString(),
     };
     
-    const existing = JSON.parse(localStorage.getItem('tipster_picks') || '[]');
-    const updated = [entry, ...existing];
-    localStorage.setItem('tipster_picks', JSON.stringify(updated));
-    setSavedPicks(updated);
-    
-    // Feedback visual temporal
-    setPickSaved(true);
-    setTimeout(() => setPickSaved(false), 2000);
+    // Guardar en la Base de Datos
+    const res = await saveDbPick(entry);
+    if (res.success) {
+      entry.id = res.id;
+      setSavedPicks(prev => [entry, ...prev]);
+      
+      // Feedback visual temporal
+      setPickSaved(true);
+      setTimeout(() => setPickSaved(false), 2000);
+    } else {
+      console.error('Error saving pick:', res.error);
+    }
   };
 
+
+
   if (loading) return (
-    <div className="max-w-3xl mx-auto px-4 py-12">
+    <div className="max-w-screen-2xl mx-auto px-6 py-12">
       <Loader text="Recolectando datos del partido…" />
       <div className="mt-6 glass-card p-4 space-y-2">
         {['Forma reciente (12 partidos)', 'H2H histórico', 'Estadísticas de liga', 'Lesiones y convocatorias', 'Probabilidades Poisson'].map(s => (
@@ -587,7 +534,7 @@ export default function Analysis() {
   );
 
   if (error) return (
-    <div className="max-w-3xl mx-auto px-4 py-12 text-center">
+    <div className="max-w-screen-2xl mx-auto px-6 py-12 text-center">
       <AlertCircle size={40} className="text-accent-red mx-auto mb-3" />
       <p className="text-accent-red font-semibold mb-4">{error}</p>
       <div className="flex gap-3 justify-center">
@@ -607,7 +554,7 @@ export default function Analysis() {
     : '';
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6 space-y-4 animate-fade-in">
+    <div className="max-w-screen-2xl mx-auto px-6 py-6 space-y-4 animate-fade-in">
 
       {/* Back + header */}
       <div className="flex items-center gap-3">
@@ -618,25 +565,9 @@ export default function Analysis() {
           <p className="section-title">Análisis Tipster</p>
           <div className="flex items-center gap-2">
             <p className="text-xs text-slate-500 mt-0.5">{fixture?.league?.name} · {kickoff}</p>
-            {(!aiSummary || aiSummary.error) && !aiLoading && (
-              <button 
-                onClick={() => { setAiSummary(null); setAiLoading(false); }}
-                className="text-[10px] bg-[#8b5cf6]/20 text-[#a78bfa] px-2 py-0.5 rounded border border-[#8b5cf6]/30 hover:bg-[#8b5cf6]/40 transition-colors"
-              >
-                {aiSummary?.error ? 'Reintentar IA ↻' : 'Cargar IA ✨'}
-              </button>
-            )}
           </div>
         </div>
       </div>
-
-      {aiSummary?.error && (
-        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] flex items-center gap-2">
-          <AlertCircle size={12} />
-          Error en la conexión con la IA: {aiSummary.message || 'Error desconocido'}. 
-          Asegúrate de que el backend (puerto 3001) esté corriendo.
-        </div>
-      )}
 
       {/* Match hero */}
       <div className="glass-card p-6"
@@ -645,10 +576,10 @@ export default function Analysis() {
           {/* Home */}
           <div className="flex flex-col items-center gap-3 flex-1">
             {fixture?.teams?.home?.logo && (
-              <img src={fixture.teams.home.logo} alt="" className="w-16 h-16 object-contain drop-shadow-lg" />
+              <img src={fixture.teams.home.logo} alt="" className="w-28 h-28 object-contain drop-shadow-lg" />
             )}
-            <p className="font-bold text-white text-center text-sm">{fixture?.teams?.home?.name}</p>
-            <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
+            <p className="font-black text-white text-center text-xl md:text-2xl">{fixture?.teams?.home?.name}</p>
+            <span className={`text-base px-3 py-1 mt-1 rounded font-bold ${
               homeForm?.score >= 65 ? 'badge-green' : homeForm?.score >= 40 ? 'badge-yellow' : 'badge-red'
             }`}>
               Forma: {homeForm?.score ?? '?'}%
@@ -724,13 +655,13 @@ export default function Analysis() {
               <>
                 <div className="text-3xl font-black text-slate-700 font-mono tracking-widest opacity-40">VS</div>
                 {poisson && (
-                  <div className="flex gap-2 bg-white/5 p-2 rounded-xl border border-white/5">
+                  <div className="flex gap-4 bg-white/5 p-4 rounded-xl border border-white/5 shadow-inner">
                     <ProbCircle prob={poisson.home} label="Local" color="#00ff88" />
                     <ProbCircle prob={poisson.draw} label="Empate" color="#ffd700" />
                     <ProbCircle prob={poisson.away} label="Visit." color="#ff4757" />
                   </div>
                 )}
-                <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest">Modelo Poisson</p>
+                <p className="text-sm text-slate-500 font-bold uppercase tracking-widest mt-1">Modelo Poisson</p>
               </>
             )}
           </div>
@@ -738,10 +669,10 @@ export default function Analysis() {
           {/* Away */}
           <div className="flex flex-col items-center gap-3 flex-1">
             {fixture?.teams?.away?.logo && (
-              <img src={fixture.teams.away.logo} alt="" className="w-16 h-16 object-contain drop-shadow-lg" />
+              <img src={fixture.teams.away.logo} alt="" className="w-28 h-28 object-contain drop-shadow-lg" />
             )}
-            <p className="font-bold text-white text-center text-sm">{fixture?.teams?.away?.name}</p>
-            <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
+            <p className="font-black text-white text-center text-xl md:text-2xl">{fixture?.teams?.away?.name}</p>
+            <span className={`text-base px-3 py-1 mt-1 rounded font-bold ${
               awayForm?.score >= 65 ? 'badge-green' : awayForm?.score >= 40 ? 'badge-yellow' : 'badge-red'
             }`}>
               Forma: {awayForm?.score ?? '?'}%
@@ -753,27 +684,22 @@ export default function Analysis() {
 
 
       {/* ── PICKS (the star) ── */}
-      <SECTION icon={Zap} title="📊 Picks Recomendados" id="picks">
-        {/* ── VEREDICTO IA GENERAL (Ahora al principio) ── */}
-        {(aiLoading || aiSummary?.verdict) && (
-          <AIBlock text={aiSummary?.verdict} loading={aiLoading} title="Veredicto IA Gemini" />
-        )}
-
+      <SECTION icon={Zap} title="📊 Apuestas Recomendadas" id="picks">
         {picksResult && (
           <div className="space-y-4">
             <PicksTable 
               picks={picksResult.picks} 
               reason={picksResult.reason} 
               onSavePick={saveIndividualPick}
+              isLive={isLiveMatch}
             />
           </div>
         )}
       </SECTION>
 
+
+
       {/* ── FORMA RECIENTE ── */}
-      {(aiLoading || aiSummary?.context) && (
-        <AIBlock text={aiSummary?.context} loading={aiLoading} title="Análisis de Forma y Contexto" />
-      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {[
           { team: fixture?.teams?.home, form: homeForm, matches: homeMatches, split: homeSplit, teamId: homeId, color: '#00ff88' },
@@ -783,31 +709,25 @@ export default function Analysis() {
             <div className="space-y-3">
               <div className="mb-4">
                 <p className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">
-                  Últimos {Math.min(matches?.length ?? 0, 12)} · Total: {matches?.length ?? 0} PJ analizados
+                  Análisis sobre los últimos {Math.min(matches?.length ?? 0, 12)} partidos
                 </p>
                 <FormPills matches={matches} teamId={teamId} />
               </div>
               <div className="space-y-0.5">
-                <StatRow label="PJ" value={form?.total ?? '–'} />
-                <StatRow label="Victoria / Empate / Derrota"
+                <StatRow label="Partidos Jugados" value={form?.total ?? '–'} />
+                <StatRow label="Ganó / Empató / Perdió"
                   value={`${form?.wins ?? 0}–${form?.draws ?? 0}–${form?.losses ?? 0}`} />
                 <StatRow label="Goles a favor"
                   value={(form?.total > 0 ? (form.goalsFor / form.total).toFixed(1) : '–')}
                   sub="por partido" color="text-accent-green" />
-                <StatRow label="Goles en contra"
+                <StatRow label="Goles recibidos"
                   value={(form?.total > 0 ? (form.goalsAgainst / form.total).toFixed(1) : '–')}
                   sub="por partido" color="text-accent-red" />
-                <StatRow label="Over 2.5" value={`${split?.over25Pct ?? 0}%`}
-                  color={split?.over25Pct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-                <StatRow label="Ambos Anotan" value={`${split?.bttsPct ?? 0}%`}
-                  color={split?.bttsPct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
+                <StatRow label="Más de 2.5 goles" value={`${split?.over25Pct ?? 0}%`}
+                  pct={split?.over25Pct ?? 0} color={split?.over25Pct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
+                <StatRow label="Ambos equipos marcan" value={`${split?.bttsPct ?? 0}%`}
+                  pct={split?.bttsPct ?? 0} color={split?.bttsPct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
               </div>
-
-              {/* Form score */}
-              <div className="stat-bar">
-                <div className="stat-bar-fill" style={{ width: `${form?.score ?? 0}%`, background: `linear-gradient(90deg,${color},${color}aa)` }} />
-              </div>
-              <p className="text-xs text-slate-500 text-right">{form?.label ?? ''} ({form?.score ?? 0}%)</p>
             </div>
           </SECTION>
         ))}
@@ -815,9 +735,6 @@ export default function Analysis() {
 
 
       {/* ── GOLES POR TRAMO ── */}
-      {(aiLoading || aiSummary?.stats) && (
-        <AIBlock text={aiSummary?.stats} loading={aiLoading} title="Análisis de Tendencias Goleadoras" />
-      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
         {[
           { label: fixture?.teams?.home?.name, slots: homeSlots, color: '#00ff88', actualGoals: homeForm?.goalsFor || 0 },
@@ -833,9 +750,6 @@ export default function Analysis() {
 
       {/* ── H2H ── */}
       <SECTION icon={Users} title="H2H · Historial de enfrentamientos" id="h2h">
-        {(aiLoading || aiSummary?.h2h) && (
-          <AIBlock text={aiSummary?.h2h} loading={aiLoading} title="Análisis H2H" />
-        )}
         {h2hData && (
           <div className="grid grid-cols-3 gap-3 mb-4">
             <div className="text-center">
@@ -856,11 +770,11 @@ export default function Analysis() {
           homeName={fixture?.teams?.home?.name} awayName={fixture?.teams?.away?.name} />
         {h2hData && (
           <div className="grid grid-cols-2 gap-2 mt-4">
-            <StatRow label="Over 2.5 H2H" value={`${h2hData.over25Pct}%`}
-              color={h2hData.over25Pct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-            <StatRow label="BTTS H2H" value={`${h2hData.bttsPct}%`}
-              color={h2hData.bttsPct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-            <StatRow label="Media goles" value={h2hData.avgGoals} sub="por partido" />
+            <StatRow label="Más de 2.5 goles (Historial)" value={`${h2hData.over25Pct}%`}
+              pct={h2hData.over25Pct} color={h2hData.over25Pct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
+            <StatRow label="Ambos marcan (Historial)" value={`${h2hData.bttsPct}%`}
+              pct={h2hData.bttsPct} color={h2hData.bttsPct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
+            <StatRow label="Media de goles" value={h2hData.avgGoals} sub="por partido" />
             <StatRow label="Partidos analizados" value={h2hData.total} />
           </div>
         )}
@@ -868,33 +782,46 @@ export default function Analysis() {
       </SECTION>
 
       {/* ── TARJETAS ── */}
-      {(homeCards || awayCards) && (
+      {(analysis?.homeCardsAnalysis || analysis?.awayCardsAnalysis) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
           {[
-            { label: fixture?.teams?.home?.name, cards: homeCards },
-            { label: fixture?.teams?.away?.name, cards: awayCards },
+            { label: fixture?.teams?.home?.name, cards: analysis.homeCardsAnalysis },
+            { label: fixture?.teams?.away?.name, cards: analysis.awayCardsAnalysis },
           ].map(({ label, cards }) => (
-            <SECTION key={label} icon={Shield} title={`🟨 Tarjetas · ${label}`} id={`cards-${label}`}>
+            <SECTION key={`cards-${label}`} icon={Shield} title={`🟨 Tarjetas · ${label}`} id={`cards-${label}`}>
               {cards ? (
-                <div className="flex justify-around items-center pt-2 pb-1">
-                  <div className="flex flex-col items-center">
-                    <div className="w-7 h-9 bg-amber-400 rounded-sm mb-2 shadow flex items-center justify-center">
-                      <span className="text-black font-bold text-xs">{cards.yellow}</span>
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="text-center flex-1 border-r border-white/10">
+                      <p className="text-2xl font-bold font-mono text-white leading-none">{cards.avg}</p>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media p/p</p>
                     </div>
-                    <p className="text-lg font-bold font-mono text-white leading-none">{cards.avgYellow}</p>
-                    <p className="text-[10px] text-slate-500 mt-1">Amarillas p/p</p>
+                    <div className="text-center flex-1">
+                      <p className="text-2xl font-bold font-mono text-slate-300 leading-none">{cards.max}</p>
+                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Máximo</p>
+                    </div>
                   </div>
-                  <div className="w-px h-12 bg-white/10 mx-2"></div>
-                  <div className="flex flex-col items-center">
-                    <div className="w-7 h-9 bg-red-500 rounded-sm mb-2 shadow flex items-center justify-center">
-                      <span className="text-white font-bold text-xs">{cards.red}</span>
+                  
+                  <div className="bg-surface-900 rounded-lg p-3">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Tarjetas (Basado en {cards.matches} partidos)</p>
+                    <div className="grid grid-cols-3 gap-2">
+                       <div className="bg-white/5 rounded px-2 py-2 text-center">
+                          <p className="text-sm font-black text-amber-400">{Math.round((cards.over1/cards.matches)*100)}%</p>
+                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 1</p>
+                       </div>
+                       <div className="bg-white/5 rounded px-2 py-2 text-center">
+                          <p className="text-sm font-black text-orange-400">{Math.round((cards.over2/cards.matches)*100)}%</p>
+                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 2</p>
+                       </div>
+                       <div className="bg-white/5 rounded px-2 py-2 text-center">
+                          <p className="text-sm font-black text-accent-red">{Math.round((cards.over3/cards.matches)*100)}%</p>
+                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 3</p>
+                       </div>
                     </div>
-                    <p className="text-lg font-bold font-mono text-white leading-none">{cards.avgRed}</p>
-                    <p className="text-[10px] text-slate-500 mt-1">Rojas p/p</p>
                   </div>
                 </div>
               ) : (
-                <p className="text-xs text-slate-600">Sin datos de tarjetas</p>
+                <p className="text-xs text-slate-600 p-4 text-center">Sin datos de tarjetas</p>
               )}
             </SECTION>
           ))}
@@ -923,7 +850,7 @@ export default function Analysis() {
                   </div>
                   
                   <div className="bg-surface-900 rounded-lg p-3">
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Córners (Últ. {corners.matches} Ptos)</p>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Córners (Basado en {corners.matches} partidos)</p>
                     <div className="grid grid-cols-3 gap-2">
                        <div className="bg-white/5 rounded px-2 py-2 text-center">
                           <p className="text-sm font-black text-accent-green">{Math.round((corners.over3/corners.matches)*100)}%</p>
@@ -951,10 +878,7 @@ export default function Analysis() {
       {/* ── LESIONES ── */}
       {injuries.length > 0 && (
         <SECTION icon={Shield} title="🚑 Lesiones y bajas" id="injuries">
-          {(aiLoading || aiSummary?.injuries) && (
-            <AIBlock text={aiSummary?.injuries} loading={aiLoading} title="Impacto de Bajas" />
-          )}
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 gap-2">
             {injuries.slice(0, 10).map((inj, i) => (
               <div key={i} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
                 <div className="flex items-center gap-2">

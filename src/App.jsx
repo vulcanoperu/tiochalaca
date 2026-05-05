@@ -1,13 +1,54 @@
-import { Routes, Route } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
+import { useState, useCallback } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Toaster, toast } from 'react-hot-toast';
 import Navbar from './components/Navbar';
 import Home from './pages/Home';
 import Analysis from './pages/Analysis';
 import LivePage from './pages/LivePage';
 import PicksPage from './pages/PicksPage';
 import SettingsPage from './pages/SettingsPage';
+import LoginPage from './pages/LoginPage';
+import AdminPage from './admin/AdminPage';
+import { useRoleSync } from './hooks/useRoleSync';
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    () => !!sessionStorage.getItem('chalaca_token')
+  );
+  // roleVersion es un contador que fuerza re-render cuando el rol cambia
+  const [roleVersion, setRoleVersion] = useState(0);
+
+  const location = useLocation();
+  const isAdminRoute = location.pathname.startsWith('/admin');
+
+  // Re-leer el user SIEMPRE fresco (se actualiza con roleVersion)
+  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
+
+  const handleRoleChange = useCallback((newRole) => {
+    setRoleVersion(v => v + 1); // fuerza re-render de toda la app
+    if (newRole === 'vip') {
+      toast.success('🎉 ¡Tu cuenta fue activada! Bienvenido a VIP.', { duration: 5000 });
+    } else if (newRole === 'pending') {
+      toast('Tu suscripción ha vencido.', { icon: '⏳', duration: 5000 });
+    }
+  }, []);
+
+  // Polling cada 10s para detectar cambios de rol hechos por el admin
+  useRoleSync(isAuthenticated ? handleRoleChange : null);
+
+  const handleLogin = () => {
+    setIsAuthenticated(true);
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <>
+        <LoginPage onLogin={handleLogin} />
+        <Toaster position="top-right" />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-grid noise-overlay relative">
       {/* Ambient glow */}
@@ -19,14 +60,16 @@ export default function App() {
       </div>
 
       <div className="relative z-10">
-        <Navbar />
-        <main className="pb-20 md:pb-6">
+        {!isAdminRoute && <Navbar />}
+        <main className={isAdminRoute ? 'pb-6' : 'pb-20 md:pb-6'}>
           <Routes>
-            <Route path="/"                    element={<Home />} />
-            <Route path="/analysis/:id"        element={<Analysis />} />
-            <Route path="/live"                element={<LivePage />} />
-            <Route path="/picks"               element={<PicksPage />} />
-            <Route path="/settings"            element={<SettingsPage />} />
+            <Route path="/"               element={<Home />} />
+            <Route path="/analysis/:id"   element={<Analysis />} />
+            <Route path="/live"           element={<LivePage />} />
+            <Route path="/picks"          element={<PicksPage />} />
+            <Route path="/settings"       element={<SettingsPage />} />
+            <Route path="/admin"          element={user.role === 'admin' ? <AdminPage /> : <Navigate to="/" replace />} />
+            <Route path="*"               element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

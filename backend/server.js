@@ -17,7 +17,11 @@ const express  = require('express');
 const cors     = require('cors');
 const axios    = require('axios');
 const cheerio  = require('cheerio');
-const { generateAIAnalysis } = require('./geminiService');
+
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const supabase = require('./database');
+const JWT_SECRET = process.env.JWT_SECRET || 'chalaca_super_secret_key_2026';
 
 const app = express();
 app.use(cors());
@@ -443,47 +447,265 @@ app.get('/api/scrapers/h2h', async (req, res) => {
 });
 
 
-// ─────────────────────────────────────────────────────────────────────
-// 6. ANÁLISIS IA — Gemini (Caché 30 min por fixture)
-// ─────────────────────────────────────────────────────────────────────
-app.post('/api/ai/analyze', async (req, res) => {
-  const matchData = req.body;
-  if (!matchData || !matchData.homeName || !matchData.awayName) {
-    return res.status(400).json({ error: 'Datos del partido incompletos' });
-  }
 
-  const cacheKey = `ai_analysis_${matchData.fixtureId || matchData.homeName}_${matchData.awayName}`;
-  const cached   = cacheGet(cacheKey);
-  if (cached) {
-    return res.json({ source: 'cache', fromCache: true, data: cached });
+// ─────────────────────────────────────────────────────────────────────
+// 7. AUTENTICACIÓN Y ADMINISTRACIÓN DE USUARIOS
+// ─────────────────────────────────────────────────────────────────────
+app.post('/api/auth/register', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Faltan datos' });
+  try {
+    const hash = bcrypt.hashSync(password, 10);
+    const { error } = await supabase.from('users').insert([{ username, password: hash, role: 'pending' }]);
+    if (error) throw error;
+    res.json({ success: true, message: 'Usuario registrado correctamente' });
+  } catch (e) {
+    if (e.message?.includes('duplicate') || e.code === '23505') return res.status(400).json({ error: 'El usuario ya existe' });
+    res.status(500).json({ error: 'Error interno' });
   }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const { data: user, error } = await supabase.from('users').select('*').eq('username', username).single();
+    if (error || !user || !bcrypt.compareSync(password, user.password)) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role, avatar_url: user.avatar_url } });
+  } catch(e) {
+    res.status(500).json({ error: 'Error en login' });
+  }
+});
+
+// Ver perfil (útil para revisar si el rol cambió)
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  try {
+    const { data: user, error } = await supabase.from('users').select('role').eq('id', req.user.id).single();
+    if (error || !user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ role: user.role });
+  } catch (e) {
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// ── Google OAuth via Supabase ──────────────────────────────────────────
+// El frontend obtiene la sesión de Supabase tras el OAuth y nos manda
+// el access_token. Nosotros verificamos con Supabase y devolvemos nuestro JWT.
+app.post('/api/auth/google', async (req, res) => {
+  const { access_token } = req.body;
+  if (!access_token) return res.status(400).json({ error: 'Falta access_token' });
 
   try {
-    const { text } = await generateAIAnalysis(matchData);
-    let parsedData = null;
-    try {
-      parsedData = JSON.parse(text);
-    } catch (e) {
-      return res.status(500).json({ error: 'La IA no devolvió un formato válido', raw: text });
+    // Verificar el token con Supabase Auth
+    const { data: { user: googleUser }, error } = await supabase.auth.getUser(access_token);
+    if (error || !googleUser) return res.status(401).json({ error: 'Token de Google inválido' });
+
+    const email      = googleUser.email;
+    const googleId   = googleUser.id;
+    const avatarUrl  = googleUser.user_metadata?.avatar_url || null;
+    const fullName   = googleUser.user_metadata?.full_name || googleUser.user_metadata?.name || email.split('@')[0];
+
+    // Buscar usuario existente por google_id o email
+    let { data: existing } = await supabase.from('users')
+      .select('*')
+      .or(`google_id.eq.${googleId},email.eq.${email}`)
+      .maybeSingle();
+
+    let dbUser = existing;
+
+    if (!dbUser) {
+      // Crear usuario nuevo desde Google
+      const username = fullName.replace(/\s+/g, '_').toLowerCase();
+      const { data: newUser, error: insertErr } = await supabase.from('users')
+        .insert([{ username, email, google_id: googleId, avatar_url: avatarUrl, password: '', role: 'pending' }])
+        .select()
+        .single();
+      if (insertErr) throw insertErr;
+      dbUser = newUser;
+    } else if (!dbUser.google_id) {
+      // Vincular cuenta existente con Google
+      await supabase.from('users').update({ google_id: googleId, avatar_url: avatarUrl, email }).eq('id', dbUser.id);
     }
-    cacheSet(cacheKey, parsedData, 30);
-    return res.json({ source: 'gemini', fromCache: false, data: parsedData });
-  } catch (err) {
-    // ── MODO DE RESCATE: Si falla la cuota, generamos un análisis básico estadístico ──
-    if (err.message.includes('quota') || err.message.includes('429')) {
-      const fallback = {
-        context: `[Modo Rescate] El ${matchData.homeName} llega con una forma del ${matchData.homeForm?.score}% contra el ${matchData.awayForm?.score}% del ${matchData.awayName}. Basado en la data de ESPN, esperamos un duelo táctico en la liga ${matchData.leagueName}.`,
-        stats: `Tendencia de goles: El equipo local tiene un ${matchData.homeSplit?.over25Pct}% de Over 2.5, mientras que el visitante promedia ${matchData.awaySplit?.over25Pct}% en sus últimos encuentros.`,
-        h2h: `En enfrentamientos directos, el local ha ganado el ${matchData.h2hData?.homeWinPct}% de las veces.`,
-        injuries: matchData.injuries?.length > 0 ? `Se reportan ${matchData.injuries.length} bajas importantes que podrían afectar el rendimiento.` : "No se reportan bajas críticas.",
-        verdict: "Análisis estadístico: Alta probabilidad de cumplimiento de los picks basados en el modelo Poisson.",
-        picks: matchData.picks?.slice(0, 2) || [],
-        warnings: "Riesgo moderado. Análisis generado por motor estadístico ante saturación de servicios IA."
-      };
-      return res.json({ source: 'fallback-engine', fromCache: false, data: fallback });
-    }
-    console.error('[Gemini] Error fatal:', err.message);
-    return res.status(500).json({ error: 'Error generando análisis IA', details: err.message });
+
+    const token = jwt.sign(
+      { id: dbUser.id, username: dbUser.username, role: dbUser.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.json({ token, user: { id: dbUser.id, username: dbUser.username, role: dbUser.role, avatar_url: avatarUrl } });
+  } catch (e) {
+    console.error('[Google Auth]', e.message);
+    res.status(500).json({ error: 'Error en autenticación con Google' });
+  }
+});
+
+
+
+// Middleware de Autenticación
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.sendStatus(401);
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acceso denegado. Se requiere rol de administrador.' });
+  next();
+}
+
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data: users, error } = await supabase.from('users').select('id, username, role, created_at').order('created_at', { ascending: false });
+    if (error) throw error;
+    
+    // Obtener todas las picks
+    const { data: allPicks } = await supabase.from('picks').select('user_id, pick_data');
+    
+    const usersWithStats = users.map(u => {
+      const userPicks = (allPicks || []).filter(p => p.user_id === u.id);
+      let total = 0, won = 0, lost = 0;
+      userPicks.forEach(p => {
+        const pd = p.pick_data;
+        if (pd?.picks) {
+          pd.picks.forEach(pick => {
+            total++;
+            if (pick.status === 'WON') won++;
+            if (pick.status === 'LOST') lost++;
+          });
+        }
+      });
+      return { ...u, stats: { total, won, lost } };
+    });
+
+    res.json(usersWithStats);
+  } catch (e) {
+    res.status(500).json({ error: 'Error obteniendo usuarios' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
+  if (req.params.id == req.user.id) return res.status(400).json({ error: 'No puedes borrar tu propia cuenta' });
+  try {
+    await supabase.from('users').delete().eq('id', req.params.id);
+    // Picks cascade automatically if foreign key is ON DELETE CASCADE, which is the case in our SQL
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: 'Error borrando usuario' });
+  }
+});
+
+// Cambiar rol de usuario
+app.put('/api/admin/users/:id/role', authenticateToken, requireAdmin, async (req, res) => {
+  const { role } = req.body;
+  if (!['pending', 'user', 'vip', 'admin'].includes(role)) return res.status(400).json({ error: 'Rol inválido' });
+  if (req.params.id == req.user.id) return res.status(400).json({ error: 'No puedes cambiar tu propio rol' });
+  try {
+    await supabase.from('users').update({ role }).eq('id', req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Error al cambiar rol' });
+  }
+});
+
+// Crear usuario desde el panel admin
+app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { username, password, role = 'user' } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Faltan datos' });
+  if (!['user', 'admin'].includes(role)) return res.status(400).json({ error: 'Rol inválido' });
+  try {
+    const hash = bcrypt.hashSync(password, 10);
+    const { error } = await supabase.from('users').insert([{ username, password: hash, role }]);
+    if (error) throw error;
+    res.json({ success: true, message: 'Usuario creado correctamente' });
+  } catch (e) {
+    if (e.message?.includes('duplicate') || e.code === '23505') return res.status(400).json({ error: 'El usuario ya existe' });
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// Cambiar contraseña de usuario (Fuerza bruta de admin)
+app.put('/api/admin/users/:id/password', authenticateToken, requireAdmin, async (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'La contraseña no puede estar vacía' });
+  try {
+    const hash = bcrypt.hashSync(password, 10);
+    await supabase.from('users').update({ password: hash }).eq('id', req.params.id);
+    res.json({ success: true, message: 'Contraseña actualizada' });
+  } catch (e) {
+    res.status(500).json({ error: 'Error al cambiar contraseña' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// 8. APUESTAS (PICKS) DEL USUARIO
+// ─────────────────────────────────────────────────────────────────────
+app.get('/api/picks', authenticateToken, async (req, res) => {
+  try {
+    const { data: picks, error } = await supabase.from('picks').select('*').eq('user_id', req.user.id).order('date', { ascending: false });
+    if (error) throw error;
+    const formatted = picks.map(p => ({
+      ...p.pick_data,
+      id: p.id
+    }));
+    res.json(formatted);
+  } catch (e) {
+    res.status(500).json({ error: 'Error obteniendo picks' });
+  }
+});
+
+app.post('/api/picks', authenticateToken, async (req, res) => {
+  try {
+    const entry = req.body;
+    const { data, error } = await supabase.from('picks').insert([{
+      user_id: req.user.id,
+      fixture_id: entry.fixtureId,
+      home_team: entry.home,
+      away_team: entry.away,
+      date: entry.date || new Date().toISOString(),
+      pick_data: entry
+    }]).select('id').single();
+    
+    if (error) throw error;
+    res.json({ success: true, id: data.id });
+  } catch (e) {
+    res.status(500).json({ error: 'Error guardando pick' });
+  }
+});
+
+app.put('/api/picks/:id', authenticateToken, async (req, res) => {
+  try {
+    const { error } = await supabase.from('picks').update({ pick_data: req.body }).eq('id', req.params.id).eq('user_id', req.user.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Error actualizando pick' });
+  }
+});
+
+app.delete('/api/picks/:id', authenticateToken, async (req, res) => {
+  try {
+    const { error } = await supabase.from('picks').delete().eq('id', req.params.id).eq('user_id', req.user.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Error borrando pick' });
+  }
+});
+
+app.delete('/api/picks', authenticateToken, async (req, res) => {
+  try {
+    const { error } = await supabase.from('picks').delete().eq('user_id', req.user.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Error borrando historial' });
   }
 });
 
@@ -496,7 +718,6 @@ if (process.env.NODE_ENV !== 'production') {
     console.log('   ✓ Caché en Memoria Activa');
     console.log('   ✓ Transfermarkt & Understat Scrapers Activos');
     console.log('   ✓ API-Sports (Caché proxy) Activa');
-    console.log(`   ✓ Gemini IA ${process.env.GEMINI_API_KEY ? 'Activa ✨' : 'INACTIVA (sin GEMINI_API_KEY)'}`);
     console.log('⚽ ══════════════════════════════════════════════════\n');
   });
 }
