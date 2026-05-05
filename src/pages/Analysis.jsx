@@ -1040,7 +1040,6 @@ export default function Analysis() {
                       En {cards.over0R} de {cards.matches} partidos recibió al menos 1 tarjeta roja · Máx: {cards.maxRed}
                     </p>
                   </div>
-                  </div>
 
                 </div>
               ) : (
