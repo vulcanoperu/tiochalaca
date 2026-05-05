@@ -908,44 +908,90 @@ export default function Analysis() {
       {(analysis?.homeCardsAnalysis || analysis?.awayCardsAnalysis) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
           {[
-            { label: fixture?.teams?.home?.name, cards: analysis.homeCardsAnalysis },
-            { label: fixture?.teams?.away?.name, cards: analysis.awayCardsAnalysis },
-          ].map(({ label, cards }) => (
-            <SECTION key={`cards-${label}`} icon={Shield} title={`🟨 Tarjetas · ${label}`} id={`cards-${label}`}>
+            { label: fixture?.teams?.home?.name, logo: fixture?.teams?.home?.logo, cards: analysis.homeCardsAnalysis },
+            { label: fixture?.teams?.away?.name, logo: fixture?.teams?.away?.logo, cards: analysis.awayCardsAnalysis },
+          ].map(({ label, logo, cards }) => (
+            <SECTION key={`cards-${label}`} icon={Shield} title={`Disciplina · ${label}`} id={`cards-${label}`}>
               {cards ? (
-                <div>
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="text-center flex-1 border-r border-white/10">
-                      <p className="text-2xl font-bold font-mono text-white leading-none">{cards.avg}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media Tarjetas</p>
+                <div className="space-y-4">
+
+                  {/* Team header */}
+                  <div className="flex items-center gap-2 mb-1">
+                    {logo && <img src={logo} alt={label} className="w-5 h-5 object-contain opacity-80" />}
+                    <span className="text-xs text-slate-400 font-semibold">Basado en {cards.matches} partidos</span>
+                  </div>
+
+                  {/* Card averages — visual */}
+                  <div className="flex items-stretch gap-3">
+                    {/* Yellow */}
+                    <div className="flex-1 rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 flex flex-col items-center gap-2">
+                      {/* Card icon */}
+                      <div className="w-7 h-10 bg-yellow-400 rounded-[3px] shadow-[0_0_14px_rgba(250,204,21,0.5)]" />
+                      <p className="text-3xl font-black font-mono text-yellow-400 leading-none mt-1">
+                        {(parseFloat(cards.avg) - parseFloat(cards.avgRed || 0)).toFixed(1)}
+                      </p>
+                      <p className="text-[10px] text-yellow-500/70 uppercase tracking-widest font-bold text-center">
+                        Amarillas<br />por partido
+                      </p>
                     </div>
-                    <div className="text-center flex-1 border-r border-white/10">
-                      <p className="text-2xl font-bold font-mono text-accent-red leading-none">{cards.avgRed}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media Rojas</p>
+
+                    {/* Red */}
+                    <div className="flex-1 rounded-xl border border-red-500/20 bg-red-500/5 p-4 flex flex-col items-center gap-2">
+                      {/* Card icon */}
+                      <div className="w-7 h-10 bg-red-600 rounded-[3px] shadow-[0_0_14px_rgba(220,38,38,0.5)]" />
+                      <p className="text-3xl font-black font-mono text-red-400 leading-none mt-1">
+                        {cards.avgRed ?? '0.00'}
+                      </p>
+                      <p className="text-[10px] text-red-500/70 uppercase tracking-widest font-bold text-center">
+                        Rojas<br />por partido
+                      </p>
                     </div>
-                    <div className="text-center flex-1">
-                      <p className="text-2xl font-bold font-mono text-slate-300 leading-none">{cards.max}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Máximo</p>
+
+                    {/* Total summary */}
+                    <div className="flex-1 rounded-xl border border-white/8 bg-white/3 p-4 flex flex-col items-center justify-center gap-2">
+                      <p className="text-3xl font-black font-mono text-white leading-none">{cards.avg}</p>
+                      <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold text-center">
+                        Total<br />tarjetas/p
+                      </p>
+                      <div className={`mt-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest ${
+                        parseFloat(cards.avg) >= 3 ? 'bg-red-500/20 text-red-400' :
+                        parseFloat(cards.avg) >= 2 ? 'bg-orange-500/20 text-orange-400' :
+                        'bg-green-500/20 text-green-400'
+                      }`}>
+                        {parseFloat(cards.avg) >= 3 ? '🔴 Indisciplinado' :
+                         parseFloat(cards.avg) >= 2 ? '🟠 Moderado' : '🟢 Limpio'}
+                      </div>
                     </div>
                   </div>
-                  
-                  <div className="bg-surface-900 rounded-lg p-3">
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Tarjetas (Basado en {cards.matches} partidos)</p>
-                    <div className="grid grid-cols-3 gap-2">
-                       <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-amber-400">{Math.round((cards.over1/cards.matches)*100)}%</p>
-                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 1</p>
-                       </div>
-                       <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-orange-400">{Math.round((cards.over2/cards.matches)*100)}%</p>
-                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 2</p>
-                       </div>
-                       <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-accent-red">{Math.round((cards.over3/cards.matches)*100)}%</p>
-                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 3</p>
-                       </div>
-                    </div>
+
+                  {/* Probability lines */}
+                  <div className="bg-surface-900 rounded-xl p-3 space-y-2">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">
+                      Probabilidad de superar línea de tarjetas
+                    </p>
+                    {[
+                      { label: 'Más de 1 tarjeta', pct: Math.round((cards.over1/cards.matches)*100), icon: '🟨' },
+                      { label: 'Más de 2 tarjetas', pct: Math.round((cards.over2/cards.matches)*100), icon: '🟨🟨' },
+                      { label: 'Más de 3 tarjetas', pct: Math.round((cards.over3/cards.matches)*100), icon: '🟥' },
+                    ].map(({ label, pct, icon }) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <span className="text-[11px] shrink-0">{icon}</span>
+                        <span className="text-[11px] text-slate-400 w-32 shrink-0">{label}</span>
+                        <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-700 ${
+                              pct >= 70 ? 'bg-red-500' : pct >= 50 ? 'bg-orange-400' : 'bg-yellow-400'
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className={`text-[11px] font-black w-8 text-right ${
+                          pct >= 70 ? 'text-red-400' : pct >= 50 ? 'text-orange-400' : 'text-yellow-400'
+                        }`}>{pct}%</span>
+                      </div>
+                    ))}
                   </div>
+
                 </div>
               ) : (
                 <p className="text-xs text-slate-600 p-4 text-center">Sin datos de tarjetas</p>
