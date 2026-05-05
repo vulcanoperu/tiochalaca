@@ -472,6 +472,12 @@ app.post('/api/auth/login', async (req, res) => {
     if (error || !user || !bcrypt.compareSync(password, user.password)) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
+
+    const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.socket.remoteAddress || 'Desconocida';
+    
+    // Actualización asíncrona para no bloquear el login (si falla porque la columna no existe, se ignora)
+    supabase.from('users').update({ last_ip: clientIp, last_login: new Date().toISOString() }).eq('id', user.id).then();
+
     const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: { id: user.id, username: user.username, role: user.role, avatar_url: user.avatar_url } });
   } catch(e) {
@@ -515,6 +521,8 @@ app.post('/api/auth/google', async (req, res) => {
 
     let dbUser = existing;
 
+    const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : req.socket.remoteAddress || 'Desconocida';
+
     if (!dbUser) {
       // Crear usuario nuevo desde Google
       let username = fullName.replace(/\s+/g, '_').toLowerCase();
@@ -524,7 +532,7 @@ app.post('/api/auth/google', async (req, res) => {
       
       const insertAttempt = async (uname) => {
         return await supabase.from('users')
-          .insert([{ username: uname, email, google_id: googleId, avatar_url: avatarUrl, password: '', role: 'pending' }])
+          .insert([{ username: uname, email, google_id: googleId, avatar_url: avatarUrl, password: '', role: 'pending', last_ip: clientIp, last_login: new Date().toISOString() }])
           .select()
           .single();
       };
@@ -538,9 +546,15 @@ app.post('/api/auth/google', async (req, res) => {
 
       if (attempt.error) throw attempt.error;
       dbUser = attempt.data;
-    } else if (!dbUser.google_id) {
-      // Vincular cuenta existente con Google
-      await supabase.from('users').update({ google_id: googleId, avatar_url: avatarUrl, email }).eq('id', dbUser.id);
+    } else {
+      // Vincular cuenta o actualizar IP de login (se ignora error de columna faltante)
+      const updatePayload = { last_ip: clientIp, last_login: new Date().toISOString() };
+      if (!dbUser.google_id) {
+        updatePayload.google_id = googleId;
+        updatePayload.avatar_url = avatarUrl;
+        updatePayload.email = email;
+      }
+      supabase.from('users').update(updatePayload).eq('id', dbUser.id).then();
     }
 
     const token = jwt.sign(
@@ -576,7 +590,7 @@ function requireAdmin(req, res, next) {
 
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { data: users, error } = await supabase.from('users').select('id, username, role, created_at').order('created_at', { ascending: false });
+    const { data: users, error } = await supabase.from('users').select('id, username, role, created_at, email, google_id, last_ip, last_login').order('created_at', { ascending: false });
     if (error) throw error;
     
     // Obtener todas las picks

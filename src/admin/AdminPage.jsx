@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Shield, Trash2, Users, UserPlus, Crown, RefreshCw, ArrowLeft, LogOut, Search, Download, KeySquare } from 'lucide-react';
 import { fetchAdminUsers, deleteUser, getAuthHeaders, forceResetPassword, logoutUser } from '../services/backendApi';
@@ -47,6 +47,7 @@ export default function AdminPage() {
   const [adding, setAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
+  const [expandedRow, setExpandedRow] = useState(null);
   const navigate = useNavigate();
 
   const currentUser = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
@@ -321,8 +322,10 @@ export default function AdminPage() {
             <tbody>
               {filteredUsers.map(u => {
                 const isSelf = u.id === currentUser.id;
+                const isExpanded = expandedRow === u.id;
                 return (
-                  <tr key={u.id} className={`border-b border-white/5 hover:bg-white/[0.02] transition-colors ${isSelf ? 'bg-accent-green/[0.03]' : ''}`}>
+                  <React.Fragment key={u.id}>
+                  <tr className={`border-b border-white/5 hover:bg-white/[0.02] transition-colors cursor-pointer ${isSelf ? 'bg-accent-green/[0.03]' : ''} ${isExpanded ? 'bg-white/[0.02]' : ''}`} onClick={() => setExpandedRow(isExpanded ? null : u.id)}>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-2">
                         <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${
@@ -401,6 +404,43 @@ export default function AdminPage() {
                       </div>
                     </td>
                   </tr>
+                  
+                  {isExpanded && (
+                    <tr className="bg-surface-800/30 border-b border-white/5 animate-in slide-in-from-top-2">
+                      <td colSpan="4" className="px-5 py-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          <div className="glass-card p-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 font-bold">Datos de Contacto</p>
+                            <p className="text-xs text-slate-300"><span className="text-slate-500">Email:</span> {u.email || 'No registrado'}</p>
+                            <p className="text-xs text-slate-300 mt-1"><span className="text-slate-500">Google Auth:</span> {u.google_id ? '✅ Vinculado' : '❌ No'}</p>
+                          </div>
+                          <div className="glass-card p-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 font-bold">Sesión y Dispositivo</p>
+                            <p className="text-xs text-slate-300"><span className="text-slate-500">Última IP:</span> {u.last_ip || 'Desconocida'}</p>
+                            <p className="text-xs text-slate-300 mt-1"><span className="text-slate-500">Último Acceso:</span> {u.last_login ? new Date(u.last_login).toLocaleString('es-PE') : 'Nunca'}</p>
+                          </div>
+                          <div className="glass-card p-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 font-bold">Estadísticas de Picks</p>
+                            <div className="flex gap-4">
+                              <div>
+                                <p className="text-xl font-mono text-white">{u.stats?.total || 0}</p>
+                                <p className="text-[9px] text-slate-500 uppercase">Total</p>
+                              </div>
+                              <div>
+                                <p className="text-xl font-mono text-accent-green">{u.stats?.won || 0}</p>
+                                <p className="text-[9px] text-slate-500 uppercase">Ganadas</p>
+                              </div>
+                              <div>
+                                <p className="text-xl font-mono text-accent-red">{u.stats?.lost || 0}</p>
+                                <p className="text-[9px] text-slate-500 uppercase">Perdidas</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
