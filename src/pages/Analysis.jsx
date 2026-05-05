@@ -318,27 +318,53 @@ export default function Analysis() {
       };
 
       const analyzeCardsFromSummaries = (summaries, teamIdStr) => {
-        let yellow = 0, red = 0;
-        const cardsArr = summaries.map(s => {
-           let count = 0;
-           (s.keyEvents || []).forEach(e => {
-             if (e.type?.text?.includes('Card') && String(e.team?.id) === String(teamIdStr)) {
-               count++;
-               if (e.type?.text?.toLowerCase().includes('red')) red++;
-               else yellow++;
-             }
-           });
-           return count;
-         });
-        if (!cardsArr.length) return null;
-        const total = cardsArr.reduce((a, b) => a + b, 0);
-        const avg = (total / cardsArr.length).toFixed(1);
-        const avgRed = (red / cardsArr.length).toFixed(2);
-        const over1 = cardsArr.filter(c => c > 1).length;
-        const over2 = cardsArr.filter(c => c > 2).length;
-        const over3 = cardsArr.filter(c => c > 3).length;
-        const max = Math.max(...cardsArr);
-        return { avg, total, max, matches: cardsArr.length, over1, over2, over3, red, avgRed };
+        const yellowArr = [];
+        const redArr    = [];
+
+        summaries.forEach(s => {
+          let yCount = 0, rCount = 0;
+          (s.keyEvents || []).forEach(e => {
+            if (e.type?.text?.includes('Card') && String(e.team?.id) === String(teamIdStr)) {
+              if (e.type?.text?.toLowerCase().includes('red')) rCount++;
+              else yCount++;
+            }
+          });
+          yellowArr.push(yCount);
+          redArr.push(rCount);
+        });
+
+        if (!yellowArr.length) return null;
+
+        const n = yellowArr.length;
+
+        const totalY = yellowArr.reduce((a, b) => a + b, 0);
+        const totalR = redArr.reduce((a, b) => a + b, 0);
+        const total  = totalY + totalR;
+
+        // Yellow independent stats
+        const avgYellow  = (totalY / n).toFixed(2);
+        const over1Y     = yellowArr.filter(c => c > 1).length;
+        const over2Y     = yellowArr.filter(c => c > 2).length;
+        const over3Y     = yellowArr.filter(c => c > 3).length;
+        const maxYellow  = Math.max(...yellowArr);
+
+        // Red independent stats
+        const avgRed     = (totalR / n).toFixed(2);
+        const over0R     = redArr.filter(c => c > 0).length; // partidos con al menos 1 roja
+        const maxRed     = Math.max(...redArr);
+
+        // Combined (for backward-compat with picks engine)
+        const avg  = (total / n).toFixed(1);
+        const over1 = yellowArr.map((y, i) => y + redArr[i]).filter(c => c > 1).length;
+        const over2 = yellowArr.map((y, i) => y + redArr[i]).filter(c => c > 2).length;
+        const over3 = yellowArr.map((y, i) => y + redArr[i]).filter(c => c > 3).length;
+        const max   = Math.max(...yellowArr.map((y, i) => y + redArr[i]));
+
+        return {
+          avg, total, max, matches: n, over1, over2, over3,
+          yellow: totalY, avgYellow, over1Y, over2Y, over3Y, maxYellow,
+          red: totalR,    avgRed,    over0R,              maxRed,
+        };
       };
 
       const homeCornersAnalysis = analyzeCorners(homeHistSummaries, homeId);
@@ -925,10 +951,9 @@ export default function Analysis() {
                   <div className="flex items-stretch gap-3">
                     {/* Yellow */}
                     <div className="flex-1 rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 flex flex-col items-center gap-2">
-                      {/* Card icon */}
                       <div className="w-7 h-10 bg-yellow-400 rounded-[3px] shadow-[0_0_14px_rgba(250,204,21,0.5)]" />
                       <p className="text-3xl font-black font-mono text-yellow-400 leading-none mt-1">
-                        {(parseFloat(cards.avg) - parseFloat(cards.avgRed || 0)).toFixed(1)}
+                        {cards.avgYellow}
                       </p>
                       <p className="text-[10px] text-yellow-500/70 uppercase tracking-widest font-bold text-center">
                         Amarillas<br />por partido
@@ -937,17 +962,16 @@ export default function Analysis() {
 
                     {/* Red */}
                     <div className="flex-1 rounded-xl border border-red-500/20 bg-red-500/5 p-4 flex flex-col items-center gap-2">
-                      {/* Card icon */}
                       <div className="w-7 h-10 bg-red-600 rounded-[3px] shadow-[0_0_14px_rgba(220,38,38,0.5)]" />
                       <p className="text-3xl font-black font-mono text-red-400 leading-none mt-1">
-                        {cards.avgRed ?? '0.00'}
+                        {cards.avgRed}
                       </p>
                       <p className="text-[10px] text-red-500/70 uppercase tracking-widest font-bold text-center">
                         Rojas<br />por partido
                       </p>
                     </div>
 
-                    {/* Total summary */}
+                    {/* Total + rating */}
                     <div className="flex-1 rounded-xl border border-white/8 bg-white/3 p-4 flex flex-col items-center justify-center gap-2">
                       <p className="text-3xl font-black font-mono text-white leading-none">{cards.avg}</p>
                       <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold text-center">
@@ -964,32 +988,58 @@ export default function Analysis() {
                     </div>
                   </div>
 
-                  {/* Probability lines */}
+                  {/* Probability lines — Yellow */}
                   <div className="bg-surface-900 rounded-xl p-3 space-y-2">
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">
-                      Probabilidad de superar línea de tarjetas
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-2">
+                      🟨 Líneas de Amarillas ({cards.matches} partidos)
                     </p>
                     {[
-                      { label: 'Más de 1 tarjeta', pct: Math.round((cards.over1/cards.matches)*100), icon: '🟨' },
-                      { label: 'Más de 2 tarjetas', pct: Math.round((cards.over2/cards.matches)*100), icon: '🟨🟨' },
-                      { label: 'Más de 3 tarjetas', pct: Math.round((cards.over3/cards.matches)*100), icon: '🟥' },
-                    ].map(({ label, pct, icon }) => (
+                      { label: 'Más de 1 amarilla',  pct: Math.round((cards.over1Y / cards.matches) * 100) },
+                      { label: 'Más de 2 amarillas', pct: Math.round((cards.over2Y / cards.matches) * 100) },
+                      { label: 'Más de 3 amarillas', pct: Math.round((cards.over3Y / cards.matches) * 100) },
+                    ].map(({ label, pct }) => (
                       <div key={label} className="flex items-center gap-2">
-                        <span className="text-[11px] shrink-0">{icon}</span>
+                        <div className="w-[7px] h-[10px] bg-yellow-400 rounded-[1px] shrink-0" />
                         <span className="text-[11px] text-slate-400 w-32 shrink-0">{label}</span>
                         <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all duration-700 ${
-                              pct >= 70 ? 'bg-red-500' : pct >= 50 ? 'bg-orange-400' : 'bg-yellow-400'
+                              pct >= 70 ? 'bg-yellow-500' : pct >= 50 ? 'bg-yellow-400' : 'bg-yellow-300'
                             }`}
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <span className={`text-[11px] font-black w-8 text-right ${
-                          pct >= 70 ? 'text-red-400' : pct >= 50 ? 'text-orange-400' : 'text-yellow-400'
-                        }`}>{pct}%</span>
+                        <span className="text-[11px] font-black text-yellow-400 w-8 text-right">{pct}%</span>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Probability lines — Red */}
+                  <div className="bg-surface-900 rounded-xl p-3 space-y-2">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-2">
+                      🟥 Líneas de Rojas ({cards.matches} partidos)
+                    </p>
+                    {[
+                      { label: 'Al menos 1 roja', pct: Math.round((cards.over0R / cards.matches) * 100) },
+                    ].map(({ label, pct }) => (
+                      <div key={label} className="flex items-center gap-2">
+                        <div className="w-[7px] h-[10px] bg-red-600 rounded-[1px] shrink-0" />
+                        <span className="text-[11px] text-slate-400 w-32 shrink-0">{label}</span>
+                        <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-700 ${
+                              pct >= 30 ? 'bg-red-600' : pct >= 15 ? 'bg-red-500' : 'bg-red-400/60'
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-black text-red-400 w-8 text-right">{pct}%</span>
+                      </div>
+                    ))}
+                    <p className="text-[9px] text-slate-600 text-center mt-1">
+                      En {cards.over0R} de {cards.matches} partidos recibió al menos 1 tarjeta roja · Máx: {cards.maxRed}
+                    </p>
+                  </div>
                   </div>
 
                 </div>
