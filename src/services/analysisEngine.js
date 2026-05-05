@@ -190,6 +190,63 @@ export function analyzeH2H(h2hMatches, homeId, awayId) {
 }
 
 /**
+ * Verifica si el partido es un derbi/clásico reconocido de alta volatilidad
+ */
+export function isDerbyMatch(home, away) {
+  if (!home || !away) return false;
+  const h = home.toLowerCase();
+  const a = away.toLowerCase();
+  
+  const derbies = [
+    ['palmeiras', 'santos'],
+    ['palmeiras', 'corinthians'],
+    ['palmeiras', 'são paulo'],
+    ['santos', 'corinthians'],
+    ['santos', 'são paulo'],
+    ['corinthians', 'são paulo'],
+    ['flamengo', 'fluminense'],
+    ['flamengo', 'vasco'],
+    ['flamengo', 'botafogo'],
+    ['cruzeiro', 'atlético-mg'],
+    ['cruzeiro', 'atletico mg'],
+    ['internacional', 'grêmio'],
+    ['gremio', 'internacional'],
+    ['boca juniors', 'river plate'],
+    ['racing club', 'independiente'],
+    ['san lorenzo', 'huracán'],
+    ['real madrid', 'barcelona'],
+    ['real madrid', 'atlético madrid'],
+    ['sevilla', 'real betis'],
+    ['arsenal', 'tottenham'],
+    ['manchester united', 'manchester city'],
+    ['manchester united', 'liverpool'],
+    ['everton', 'liverpool'],
+    ['ac milan', 'internazionale'],
+    ['milan', 'inter'],
+    ['juventus', 'internazionale'],
+    ['juventus', 'inter'],
+    ['roma', 'lazio'],
+    ['mönchengladbach', 'dortmund'],
+    ['bayern', 'dortmund'],
+    ['alianza lima', 'universitario'],
+    ['sporting cristal', 'universitario'],
+    ['alianza lima', 'sporting cristal'],
+    ['chivas', 'américa'],
+    ['cruz azul', 'américa'],
+    ['nacional', 'peñarol'],
+    ['colo colo', 'universidad de chile'],
+    ['millonarios', 'santa fe'],
+    ['nacional', 'medellín']
+  ];
+
+  return derbies.some(pair => {
+    if (h.includes(pair[0]) && a.includes(pair[1])) return true;
+    if (a.includes(pair[0]) && h.includes(pair[1])) return true;
+    return false;
+  });
+}
+
+/**
  * Motor principal de generación de picks
  * v2 — Mercados extendidos + integración de predicción oficial
  * @param {object} officialPrediction - Predicción de API-Football (opcional)
@@ -201,6 +258,7 @@ export function analyzeH2H(h2hMatches, homeId, awayId) {
  * @param {object} awaySlots          - Goles por tramo
  * @param {Array}  injuries           - Lista de bajas del partido [{team:{name}, player:{name}}]
  * @param {string} homeTeamName       - Nombre del equipo local (para filtrar lesiones)
+ * @param {string} awayTeamName       - Nombre del equipo visitante
  * @param {number} homeRestDays       - Días desde el último partido del local
  * @param {number} awayRestDays       - Días desde el último partido del visitante
  */
@@ -216,6 +274,7 @@ export function generatePicks({
   poissonProbs,
   injuries = [],
   homeTeamName = '',
+  awayTeamName = '',
   homeRestDays = null,
   awayRestDays = null,
   marketOdds = null,
@@ -235,6 +294,8 @@ export function generatePicks({
       reason: `El equipo ${minTeam} registra muy pocos partidos en el año actual. No es recomendable apostar sin datos suficientes.`
     };
   }
+
+  const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
 
   const homeAvgGF = homeForm.total > 0 ? +(homeForm.goalsFor  / homeForm.total).toFixed(2) : 0;
   const homeAvgGA = homeForm.total > 0 ? +(homeForm.goalsAgainst / homeForm.total).toFixed(2) : 0;
@@ -477,31 +538,35 @@ export function generatePicks({
   // Ahora usamos el dato real del H2H en lugar del proxy *1.2
   const h2hOver15Pct   = h2hData?.over15Pct ?? (h2hData ? Math.min(Math.round(h2hData.over25Pct * 1.2), 100) : 0);
   const combinedOver15 = Math.round(homeOver15Pct * teamWeight + awayOver15Pct * teamWeight + h2hOver15Pct * h2hWeight);
-  if (combinedOver15 >= 70 && projectedGoals >= 1.6) {
+  if (combinedOver15 >= 78 && projectedGoals >= 1.8) {
     const prob = Math.min(combinedOver15, 91);
-    addPick({
-      market: 'Total de Goles',
-      selection: 'Más de 1.5 goles',
-      probability: prob,
-      tier: prob >= 85 ? '🟢' : '🔵',
-      argument: `${combinedOver15}% de partidos con 2+ goles. Proyección: ${projectedGoals} goles. Mercado de menor riesgo.`,
-      risk: prob >= 85 ? 'Bajo' : 'Moderado',
-    });
+    if (prob >= 78) {
+      addPick({
+        market: 'Total de Goles',
+        selection: 'Más de 1.5 goles',
+        probability: prob,
+        tier: prob >= 85 ? '🟢' : '🔵',
+        argument: `${combinedOver15}% de partidos con 2+ goles. Proyección: ${projectedGoals} goles. Filtro estricto superado.`,
+        risk: prob >= 85 ? 'Bajo' : 'Moderado',
+      });
+    }
   }
 
   // ── Over 2.5 ──────────────────────────────────────────────────
-  if (combinedOver25 >= 60 && projectedGoals >= 2.3) {
+  if (combinedOver25 >= 70 && projectedGoals >= 2.5) {
     const officialBoost = hasOfficial && officialWinner?.toLowerCase().includes('goals') ? 4 : 0;
     const prob = Math.min(combinedOver25 + officialBoost, 88);
-    const ctxNote = [homeContextNote, awayContextNote].filter(Boolean).join(' · ');
-    addPick({
-      market: 'Total de Goles',
-      selection: 'Más de 2.5 goles',
-      probability: prob,
-      tier: prob >= 82 ? '🟢' : '🔵',
-      argument: `${combinedOver25}% de partidos con 3+ goles. Proyección ajustada: ${projectedGoals} goles.${ctxNote ? ` Contexto: ${ctxNote}.` : ''}`,
-      risk: prob >= 82 ? 'Bajo' : 'Moderado',
-    });
+    if (prob >= 75) {
+      const ctxNote = [homeContextNote, awayContextNote].filter(Boolean).join(' · ');
+      addPick({
+        market: 'Total de Goles',
+        selection: 'Más de 2.5 goles',
+        probability: prob,
+        tier: prob >= 82 ? '🟢' : '🔵',
+        argument: `${combinedOver25}% de partidos con 3+ goles. Proyección ajustada: ${projectedGoals} goles.${ctxNote ? ` Contexto: ${ctxNote}.` : ''}`,
+        risk: prob >= 82 ? 'Bajo' : 'Moderado',
+      });
+    }
   }
 
   // ── Over 3.5 ──────────────────────────────────────────────────
@@ -523,16 +588,18 @@ export function generatePicks({
 
   // ── Under 2.5 ─────────────────────────────────────────────────
   const under25Pct = 100 - combinedOver25;
-  if (under25Pct >= 62 && projectedGoals < 2.2) {
+  if (under25Pct >= 72 && projectedGoals <= 2.0) {
     const prob = Math.min(under25Pct, 86);
-    addPick({
-      market: 'Total de Goles',
-      selection: 'Menos de 2.5 goles',
-      probability: prob,
-      tier: prob >= 82 ? '🟢' : '🔵',
-      argument: `${under25Pct}% de probabilidad de partido cerrado. Proyección: ${projectedGoals} goles. Defensa sólida de ambos equipos.`,
-      risk: prob >= 82 ? 'Bajo' : 'Moderado',
-    });
+    if (prob >= 75) {
+      addPick({
+        market: 'Total de Goles',
+        selection: 'Menos de 2.5 goles',
+        probability: prob,
+        tier: prob >= 82 ? '🟢' : '🔵',
+        argument: `${under25Pct}% de probabilidad de partido cerrado. Proyección: ${projectedGoals} goles. Defensa sólida de ambos equipos.`,
+        risk: prob >= 82 ? 'Bajo' : 'Moderado',
+      });
+    }
   }
 
   // ── Ambos Anotan ───────────────────────────────────────────────
@@ -541,16 +608,18 @@ export function generatePicks({
   const h2hBttsPct   = h2hData?.bttsPct ?? 0;
   const combinedBTTS = Math.round(homeBttsPct * teamWeight + awayBttsPct * teamWeight + h2hBttsPct * h2hWeight);
 
-  if (combinedBTTS >= 58) {
+  if (combinedBTTS >= 70 && projectedGoals >= 2.5) {
     const prob = Math.min(combinedBTTS, 87);
-    addPick({
-      market: 'Ambos Marcan',
-      selection: 'Sí, ambos anotan',
-      probability: prob,
-      tier: prob >= 82 ? '🟢' : '🔵',
-      argument: `${combinedBTTS}% de partidos con gol de ambos equipos. Local anota ${homeAvgGF}/p, Visitante ${awayAvgGF}/p.`,
-      risk: prob >= 82 ? 'Bajo' : 'Moderado',
-    });
+    if (prob >= 75) {
+      addPick({
+        market: 'Ambos Marcan',
+        selection: 'Sí, ambos anotan',
+        probability: prob,
+        tier: prob >= 82 ? '🟢' : '🔵',
+        argument: `${combinedBTTS}% de partidos con gol de ambos equipos. Local anota ${homeAvgGF}/p, Visitante ${awayAvgGF}/p.`,
+        risk: prob >= 82 ? 'Bajo' : 'Moderado',
+      });
+    }
   }
 
   // ── BTTS + Over 2.5 (Combo) ────────────────────────────────────
@@ -600,13 +669,13 @@ export function generatePicks({
 
   if (homeEffectiveScore >= 65 && awayEffectiveScore <= 45 && effectiveAdv >= 18) {
     const prob = Math.min(Math.round(homeEffectiveScore * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4) + officialHomeBoost, 86);
-    if (prob >= 62) {
+    if (prob >= 75) {
       const splitNote = homeFormAtHome?.total >= 3 ? ` (Casa: ${homeFormAtHome.wins}G/${homeFormAtHome.total}PJ)` : '';
       addPick({
         market: 'Ganador del Partido',
         selection: 'Victoria Local',
         probability: prob,
-        tier: prob >= 78 ? '🔵' : '🟡',
+        tier: prob >= 80 ? '🔵' : '🟡',
         argument: `Forma local en casa: ${homeEffectiveScore}%${splitNote}. Visitante fuera: ${awayEffectiveScore}%. Ventaja: +${effectiveAdv}pts. H2H: ${h2hData?.homeWinPct ?? '?'}%.${hasOfficial ? ` Oficial: ${officialHomeWinPct}%.` : ''}`,
         risk: 'Moderado',
         units: '3-5u',
@@ -617,25 +686,64 @@ export function generatePicks({
   // ── Ganador: Visitante ─────────────────────────────────────────
   if (awayEffectiveScore >= 65 && homeEffectiveScore <= 45 && -effectiveAdv >= 18) {
     const prob = Math.min(Math.round(awayEffectiveScore * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4) + officialAwayBoost, 86);
-    if (prob >= 62) {
+    if (prob >= 75) {
       const splitNote = awayFormAway?.total >= 3 ? ` (Fuera: ${awayFormAway.wins}G/${awayFormAway.total}PJ)` : '';
       addPick({
         market: 'Ganador del Partido',
         selection: 'Victoria Visitante',
         probability: prob,
+        tier: prob >= 80 ? '🔵' : '🟡',
+        argument: `Forma visitante fuera: ${awayEffectiveScore}%${splitNote}. Local en casa: ${homeEffectiveScore}%. H2H: ${h2hData?.awayWinPct ?? '?'}%.${hasOfficial ? ` Oficial: ${officialAwayWinPct}%.` : ''}`,
+        risk: 'Moderado',
+        units: '3-5u',
+      });
+    }
+  }
+
+  // ── Handicap Asiático -0.5 (Local favorito claro) ──────────────
+  if (homeForm.score >= 70 && homeScoreAdv >= 22 && (h2hData?.homeWinPct ?? 0) >= 50) {
+    const prob = Math.min(Math.round(homeForm.score * 0.55 + (h2hData?.homeWinPct ?? 50) * 0.35 + officialHomeWinPct * 0.1), 85);
+    if (prob >= 65) {
+      addPick({
+        market: 'Handicap Asiático',
+        selection: 'Local -0.5 (Gana sin empate)',
+        probability: prob,
         tier: prob >= 78 ? '🔵' : '🟡',
-        argument: `Forma visitante fuera: ${awayEffectiveScore}%${splitNote}. Local en casa: ${homeEffectiveScore}%. H2H: ${h2hData?.awayWinPct ?? '?'}%.${hasOffic  // ── Doble Oportunidad: Local o Empate (1X) ────────────────────
+        argument: `Local claramente superior (Forma: ${homeForm.score}%, ventaja +${homeScoreAdv}pts). HA -0.5 elimina el riesgo de empate con mejor cuota que 1X2.`,
+        risk: 'Moderado',
+        units: '3-4u',
+      });
+    }
+  }
+
+  // ── Handicap Asiático -0.5 (Visitante favorito claro) ──────────
+  if (awayForm.score >= 70 && -homeScoreAdv >= 22 && (h2hData?.awayWinPct ?? 0) >= 50) {
+    const prob = Math.min(Math.round(awayForm.score * 0.55 + (h2hData?.awayWinPct ?? 50) * 0.35 + officialAwayWinPct * 0.1), 85);
+    if (prob >= 65) {
+      addPick({
+        market: 'Handicap Asiático',
+        selection: 'Visitante -0.5 (Gana sin empate)',
+        probability: prob,
+        tier: prob >= 78 ? '🔵' : '🟡',
+        argument: `Visitante claramente superior (Forma: ${awayForm.score}%, ventaja +${-homeScoreAdv}pts). HA -0.5 elimina el riesgo de empate.`,
+        risk: 'Moderado',
+        units: '3-4u',
+      });
+    }
+  }
+
+  // ── Doble Oportunidad: Local o Empate (1X) ────────────────────
   // Usamos Poisson: prob 1X = P(local gana) + P(empate)
   if (!isLive && poissonProbs) {
     const prob1X = Math.round(poissonProbs.home + poissonProbs.draw);
     const h2hBase1X = h2hData ? (h2hData.homeWinPct + h2hData.drawPct) : prob1X;
     const combined1X = Math.round(prob1X * 0.6 + h2hBase1X * 0.4);
-    // Solo si el local es moderadamente favorito (no dominante, que ya tiene Victoria Local)
-    if (combined1X >= 60 && combined1X < 80 && poissonProbs.home < 55) {
+    // Solo si el local es favorito para proteger el empate, probabilidad total > 75%
+    if (combined1X >= 75 && poissonProbs.home < 70) {
       addPick({
         market: 'Doble Oportunidad',
         selection: 'Local o Empate (1X)',
-        probability: Math.min(combined1X, 82),
+        probability: Math.min(combined1X, 86),
         tier: '🔵',
         argument: `Poisson: Local ${poissonProbs.home.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}% = ${prob1X}% de 1X. H2H 1X: ${h2hBase1X}%. Protección ante el empate.`,
         risk: 'Bajo',
@@ -646,11 +754,11 @@ export function generatePicks({
     const probX2 = Math.round(poissonProbs.away + poissonProbs.draw);
     const h2hBaseX2 = h2hData ? (h2hData.awayWinPct + h2hData.drawPct) : probX2;
     const combinedX2 = Math.round(probX2 * 0.6 + h2hBaseX2 * 0.4);
-    if (combinedX2 >= 60 && combinedX2 < 80 && poissonProbs.away < 55) {
+    if (combinedX2 >= 75 && poissonProbs.away < 70) {
       addPick({
         market: 'Doble Oportunidad',
         selection: 'Visitante o Empate (X2)',
-        probability: Math.min(combinedX2, 82),
+        probability: Math.min(combinedX2, 86),
         tier: '🔵',
         argument: `Poisson: Visitante ${poissonProbs.away.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}% = ${probX2}% de X2. H2H X2: ${h2hBaseX2}%. Protección ante el empate.`,
         risk: 'Bajo',
@@ -769,7 +877,34 @@ export function generatePicks({
   }
 
   // Filtro: picks con tier definido y probabilidad >= umbral dinámico por muestra
-  const filtered = picks.filter(p => p.tier && p.probability >= dynamicMinProb);
+  let filtered = picks.filter(p => p.tier && p.probability >= dynamicMinProb);
+
+  // ── FILTRO ANTI-CLÁSICOS (SNIPER MODE) ────────────────────────
+  if (isDerby && !isLive) {
+    // Si es un derbi pre-match, bloqueamos todos los mercados especulativos (Victorias, Ambos Anotan, Overs)
+    filtered = filtered.filter(p => 
+      p.selection.includes('Menos de 2.5') || 
+      p.selection.includes('Menos de 3.5') ||
+      p.selection === 'Empate' ||
+      p.market === 'Tarjetas Totales'
+    );
+    
+    // Si no quedó ningún pick (lo normal, porque filtramos casi todos), inyectamos el Under 3.5 seguro
+    if (filtered.length === 0) {
+      filtered.push({
+        market: 'Total de Goles',
+        selection: 'Menos de 3.5 goles',
+        probability: 85,
+        tier: '🟢',
+        argument: `[🚨 MODO DERBI] Partido de Altísima Tensión detectado. La estadística histórica de forma se anula en los clásicos. Se espera un partido táctico y cerrado.`,
+        risk: 'Bajo',
+      });
+    } else {
+      // Modificar el argumento de los picks que sobrevivieron
+      filtered.forEach(p => p.argument = `[🚨 MODO DERBI] ${p.argument}`);
+    }
+  }
+
   filtered.sort((a, b) => b.probability - a.probability);
 
   // ── Límite: máximo 5 picks para no saturar al usuario ─────────
