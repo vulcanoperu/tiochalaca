@@ -367,8 +367,10 @@ export default function Analysis() {
       setPrediction(null); // Podríamos mapear pickcenter aquí luego
 
       // 3. Local analysis
-      const homeForm = calculateFormScore(hm, homeId);
-      const awayForm = calculateFormScore(am, awayId);
+      const homeForm       = calculateFormScore(hm, homeId);        // Forma general
+      const awayForm       = calculateFormScore(am, awayId);
+      const homeFormAtHome = calculateFormScore(hm, homeId, 'home'); // Solo partidos en casa
+      const awayFormAway   = calculateFormScore(am, awayId, 'away'); // Solo partidos fuera
       const homeSplit = calculateOverUnder(hm, homeId);
       const awaySplit = calculateOverUnder(am, awayId);
       const h2hData   = analyzeH2H(h2h, homeId, awayId);
@@ -377,27 +379,127 @@ export default function Analysis() {
       const homeSlots = analyzeGoalsByTimeSlot(homeHistEvs, homeId);
       const awaySlots = analyzeGoalsByTimeSlot(awayHistEvs, awayId);
 
+      // Poisson mejorado: usa avg en CASA del local vs avg FUERA del visitante
+      // si hay suficientes datos split (≥3 partidos); si no, cae back al general
+      const hGF = homeFormAtHome.total >= 3
+        ? homeFormAtHome.goalsFor   / homeFormAtHome.total
+        : homeForm.goalsFor   / Math.max(homeForm.total, 1);
+      const hGA = homeFormAtHome.total >= 3
+        ? homeFormAtHome.goalsAgainst / homeFormAtHome.total
+        : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
+      const aGF = awayFormAway.total >= 3
+        ? awayFormAway.goalsFor   / awayFormAway.total
+        : awayForm.goalsFor   / Math.max(awayForm.total, 1);
+      const aGA = awayFormAway.total >= 3
+        ? awayFormAway.goalsAgainst / awayFormAway.total
+        : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
 
-      const poisson = calcMatchProbabilities(
-        homeForm.goalsFor  / Math.max(homeForm.total, 1),
-        homeForm.goalsAgainst / Math.max(homeForm.total, 1),
-        awayForm.goalsFor  / Math.max(awayForm.total, 1),
-        awayForm.goalsAgainst / Math.max(awayForm.total, 1),
-      );
+      const poisson = calcMatchProbabilities(hGF, hGA, aGF, aGA);
 
       const isLive = summary.header?.competitions?.[0]?.status?.type?.state === 'in';
       const liveClock = summary.header?.competitions?.[0]?.status?.displayClock || "0'";
       const liveHomeGoals = parseInt(homeComp?.score ?? 0);
       const liveAwayGoals = parseInt(awayComp?.score ?? 0);
 
+      // Fetch official prediction y Cuotas de Mercado (Value Bets)
+      let officialPred = null;
+      let marketOdds = null;
+      try {
+        const pcData = summary.pickcenter;
+        if (pcData && Array.isArray(pcData) && pcData.length > 0) {
+          const item = pcData[0];
+          officialPred = {
+            predictions: {
+              percent: {
+                home: item.homeTeamOdds?.winPercentage ? `${Math.round(item.homeTeamOdds.winPercentage)}%` : null,
+                draw: item.drawOdds?.winPercentage ? `${Math.round(item.drawOdds.winPercentage)}%` : null,
+                away: item.awayTeamOdds?.winPercentage ? `${Math.round(item.awayTeamOdds.winPercentage)}%` : null,
+              },
+              winner: { comment: item.provider?.name || '' },
+            }
+          };
+
+          const getDec = (o) => {
+            if (!o) return null;
+            const val = parseFloat(o.value || o.moneyLine || 0);
+            if (val > 0) return (val / 100) + 1;
+            if (val < 0) return (100 / Math.abs(val)) + 1;
+            return null;
+          };
+          marketOdds = { home: getDec(item.homeTeamOdds), away: getDec(item.awayTeamOdds), draw: getDec(item.drawOdds) };
+        }
+      } catch (_) { /* sin predicción oficial */ }
+
+      // Extraer Posiciones en la tabla (Motivación)
+      let matchStandings = null;
+      try {
+        const st = summary.standings?.groups?.[0]?.standings?.entries;
+        if (st && st.length > 0) {
+          const homeSt = st.find(s => String(s.team?.id) === String(homeId));
+          const awaySt = st.find(s => String(s.team?.id) === String(awayId));
+          if (homeSt && awaySt) {
+            matchStandings = { 
+              homeRank: homeSt.stats?.find(s=>s.name==='rank')?.value || homeSt.stats?.find(s=>s.name==='rankChange')?.value, 
+              awayRank: awaySt.stats?.find(s=>s.name==='rank')?.value || awaySt.stats?.find(s=>s.name==='rankChange')?.value, 
+              total: st.length 
+            };
+          }
+        }
+      } catch(_) {}
+
+      // Extraer Estadísticas Avanzadas (xG, Posesión)
+      let advancedStats = null;
+      try {
+        const box = summary.boxscore?.teams;
+        if (box && box.length === 2) {
+          const getStat = (t, name) => parseFloat(t.statistics?.find(s=>s.name === name)?.displayValue || 0);
+          const homeBox = box.find(t => String(t.team?.id) === String(homeId));
+          const awayBox = box.find(t => String(t.team?.id) === String(awayId));
+          if (homeBox && awayBox) {
+            advancedStats = {
+              home: { xG: getStat(homeBox, 'expectedGoals'), possession: getStat(homeBox, 'possessionPct') },
+              away: { xG: getStat(awayBox, 'expectedGoals'), possession: getStat(awayBox, 'possessionPct') }
+            };
+          }
+        }
+      } catch(_) {}
+
+      // Calcular días de descanso desde el último partido
+      const calcRest = (matches) => {
+        if (!matches || matches.length === 0) return null;
+        const lastDate = matches[0]?.fixture?.date;
+        if (!lastDate) return null;
+        const diff = Math.floor((Date.now() - new Date(lastDate).getTime()) / (1000 * 60 * 60 * 24));
+        return diff;
+      };
+      const homeRestDays = calcRest(hm);
+      const awayRestDays = calcRest(am);
+
       const picksRes = generatePicks({ 
         homeStats: null, awayStats: null, 
         h2hData, homeForm, awayForm, 
         homeSplitStats: homeSplit, awaySplitStats: awaySplit,
-        isLive, liveClock, liveHomeGoals, liveAwayGoals
+        isLive, liveClock, liveHomeGoals, liveAwayGoals,
+        officialPrediction: officialPred,
+        homeCornersData: homeCornersAnalysis,
+        awayCornersData: awayCornersAnalysis,
+        homeCardsData: homeCardsAnalysis,
+        awayCardsData: awayCardsAnalysis,
+        homeSlots,
+        awaySlots,
+        homeFormAtHome,
+        awayFormAway,
+        poissonProbs: poisson,
+        injuries: inj,
+        homeTeamName: fix.teams.home.name,
+        homeRestDays,
+        awayRestDays,
+        marketOdds,
+        matchStandings,
+        advancedStats,
       });
 
-      setAnalysis({ homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCardsAnalysis, awayCardsAnalysis, homeCornersAnalysis, awayCornersAnalysis });
+      setAnalysis({ homeForm, awayForm, homeFormAtHome, awayFormAway, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCardsAnalysis, awayCardsAnalysis, homeCornersAnalysis, awayCornersAnalysis });
       setPicksResult(picksRes);
     } catch (e) {
       console.error(e);

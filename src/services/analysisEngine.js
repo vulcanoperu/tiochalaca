@@ -5,18 +5,29 @@
 
 /**
  * Calcula la tendencia de forma reciente ponderada
- * matches: array de últimos partidos (el más reciente primero)
+ * @param {Array}  matches - Últimos partidos (más reciente primero)
+ * @param {string} teamId  - ID del equipo
+ * @param {string} side    - 'home' | 'away' | null (todos)
  */
-export function calculateFormScore(matches, teamId) {
+export function calculateFormScore(matches, teamId, side = null) {
   if (!matches || matches.length === 0) return { score: 0, label: 'Sin datos', wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, total: 0 };
 
+  // ── Filtro por condición de local/visitante ──────────────────
+  let pool = matches;
+  if (side === 'home') {
+    pool = matches.filter(m => String(m.teams?.home?.id) === String(teamId));
+  } else if (side === 'away') {
+    pool = matches.filter(m => String(m.teams?.away?.id) === String(teamId));
+  }
+  if (pool.length === 0) return { score: 0, label: 'Sin datos', wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, total: 0 };
+
   let wins = 0, draws = 0, losses = 0, goalsFor = 0, goalsAgainst = 0;
-  const weights = [3, 3, 2, 2, 1, 1, 1, 1, 1, 1]; // más peso a partidos recientes
+  const weights = [3, 3, 2, 2, 1, 1, 1, 1, 1, 1];
 
   let weightedScore = 0;
   let totalWeight = 0;
 
-  matches.slice(0, 12).forEach((m, i) => {
+  pool.slice(0, 12).forEach((m, i) => {
     const w = weights[i] || 1;
     const isHome = String(m.teams?.home?.id) === String(teamId);
     const homeGoals = m.goals?.home ?? 0;
@@ -41,7 +52,7 @@ export function calculateFormScore(matches, teamId) {
   const score = totalWeight > 0 ? Math.round((weightedScore / maxPossible) * 100) : 0;
   const label = score >= 75 ? 'Excelente' : score >= 55 ? 'Buena' : score >= 35 ? 'Regular' : 'Mala';
 
-  return { score, label, wins, draws, losses, goalsFor, goalsAgainst, total: Math.min(matches.length, 12) };
+  return { score, label, wins, draws, losses, goalsFor, goalsAgainst, total: Math.min(pool.length, 12) };
 }
 
 /**
@@ -142,7 +153,7 @@ export function analyzeH2H(h2hMatches, homeId, awayId) {
   if (!h2hMatches || h2hMatches.length === 0) return null;
 
   let homeWins = 0, awayWins = 0, draws = 0;
-  let totalGoals = 0, btts = 0, over25 = 0;
+  let totalGoals = 0, btts = 0, over15 = 0, over25 = 0;
 
   h2hMatches.slice(0, 12).forEach(m => {
     const hg = m.goals?.home ?? 0;
@@ -150,6 +161,7 @@ export function analyzeH2H(h2hMatches, homeId, awayId) {
     const total = hg + ag;
     totalGoals += total;
 
+    if (total > 1.5) over15++;
     if (total > 2.5) over25++;
     if (hg > 0 && ag > 0) btts++;
 
@@ -171,16 +183,45 @@ export function analyzeH2H(h2hMatches, homeId, awayId) {
     drawPct:    Math.round(draws    / n * 100),
     avgGoals:   +(totalGoals / n).toFixed(1),
     bttsPct:    Math.round(btts   / n * 100),
-    over25Pct:  Math.round(over25 / n * 100),
+    over15Pct:  Math.round(over15  / n * 100),
+    over25Pct:  Math.round(over25  / n * 100),
     total: n,
   };
 }
 
 /**
  * Motor principal de generación de picks
- * Umbrales calibrados para muestras de partidos (ESPN ~12 partidos)
+ * v2 — Mercados extendidos + integración de predicción oficial
+ * @param {object} officialPrediction - Predicción de API-Football (opcional)
+ * @param {object} homeCornersData    - { avg, over3, over4, over5, matches }
+ * @param {object} awayCornersData    - { avg, over3, over4, over5, matches }
+ * @param {object} homeCardsData      - { avg, over1, over2, over3, matches }
+ * @param {object} awayCardsData      - { avg, over1, over2, over3, matches }
+ * @param {object} homeSlots          - Goles por tramo (analyzeGoalsByTimeSlot)
+ * @param {object} awaySlots          - Goles por tramo
+ * @param {Array}  injuries           - Lista de bajas del partido [{team:{name}, player:{name}}]
+ * @param {string} homeTeamName       - Nombre del equipo local (para filtrar lesiones)
+ * @param {number} homeRestDays       - Días desde el último partido del local
+ * @param {number} awayRestDays       - Días desde el último partido del visitante
  */
-export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayForm, homeSplitStats, awaySplitStats, isLive, liveClock, liveHomeGoals, liveAwayGoals }) {
+export function generatePicks({
+  homeStats, awayStats, h2hData, homeForm, awayForm,
+  homeSplitStats, awaySplitStats,
+  isLive, liveClock, liveHomeGoals, liveAwayGoals,
+  officialPrediction,
+  homeCornersData, awayCornersData,
+  homeCardsData, awayCardsData,
+  homeSlots, awaySlots,
+  homeFormAtHome, awayFormAway,
+  poissonProbs,
+  injuries = [],
+  homeTeamName = '',
+  homeRestDays = null,
+  awayRestDays = null,
+  marketOdds = null,
+  matchStandings = null,
+  advancedStats = null,
+}) {
   const picks = [];
 
   const minMatches = 6;
@@ -200,7 +241,94 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
   const awayAvgGF = awayForm.total > 0 ? +(awayForm.goalsFor  / awayForm.total).toFixed(2) : 0;
   const awayAvgGA = awayForm.total > 0 ? +(awayForm.goalsAgainst / awayForm.total).toFixed(2) : 0;
 
-  const projectedGoals = +((homeAvgGF + awayAvgGF + homeAvgGA + awayAvgGA) / 2).toFixed(2);
+  // ── #1: Escala de confianza por tamaño de muestra ─────────────────
+  // Con pocos partidos exigimos mayor umbral de probabilidad para reducir falsos positivos
+  const minSample = Math.min(homeTotal, awayTotal);
+  // Umbral dinámico: con 6 PJ exigimos 70%, con 12 PJ exigimos 62%
+  const dynamicMinProb = minSample >= 12 ? 62
+    : minSample >= 10 ? 64
+    : minSample >= 8  ? 66
+    : minSample >= 6  ? 68
+    : 70; // < 6 PJ nunca llega aquí (bloqueado arriba)
+
+  // ── #2: Penalización por lesiones ──────────────────────────────
+  // Contamos bajas por equipo. Cada baja resta pequeña parte de la proyección de goles
+  const homeInjuries = injuries.filter(inj =>
+    inj.team?.name && homeTeamName &&
+    inj.team.name.toLowerCase().includes(homeTeamName.toLowerCase().split(' ')[0])
+  ).length;
+  const awayInjuries = injuries.filter(inj =>
+    inj.team?.name && homeTeamName &&
+    !inj.team.name.toLowerCase().includes(homeTeamName.toLowerCase().split(' ')[0])
+  ).length;
+
+  // Cada baja descuenta 0.08 goles esperados (cap en 0.4 = 5 bajas)
+  const homeInjPenalty  = Math.min(homeInjuries * 0.08, 0.40);
+  const awayInjPenalty  = Math.min(awayInjuries  * 0.08, 0.40);
+  // Penaliza el score de forma en 3 puntos por cada baja (cap 12pts)
+  const homeFormPenalty = Math.min(homeInjuries * 3, 12);
+  const awayFormPenalty = Math.min(awayInjuries  * 3, 12);
+
+  // ── #3: Penalización por cansancio (días de descanso) ─────────────
+  // < 3 días = alta fatiga, 3-4 días = leve, ≥5 días = descansado
+  const calcRestPenalty = (days) => {
+    if (days === null || days === undefined) return { goalsPenalty: 0, formPenalty: 0, label: '' };
+    if (days <= 2)  return { goalsPenalty: 0.15, formPenalty: 8,  label: `⚠️ Cansancio crítico (${days}d)` };
+    if (days <= 4)  return { goalsPenalty: 0.06, formPenalty: 3,  label: `⚠️ Poco descanso (${days}d)` };
+    return { goalsPenalty: 0, formPenalty: 0, label: '' };
+  };
+  const homeRest = calcRestPenalty(homeRestDays);
+  const awayRest = calcRestPenalty(awayRestDays);
+
+  // ── #4: Ajuste por xG (Expected Goals) ─────────────────────────
+  let xGBoostHome = 0, xGBoostAway = 0;
+  if (advancedStats?.home?.xG) {
+    // Si genera más xG que goles reales, recibe un ligero boost (crea peligro). Si no, penaliza levemente.
+    xGBoostHome = (advancedStats.home.xG - homeAvgGF) * 0.25; 
+  }
+  if (advancedStats?.away?.xG) {
+    xGBoostAway = (advancedStats.away.xG - awayAvgGF) * 0.25;
+  }
+
+  // ── #5: Factor Motivación (Posición en Tabla) ───────────────────
+  let homeMotivPenalty = 0, awayMotivPenalty = 0;
+  let homeMotivNote = '', awayMotivNote = '';
+  if (matchStandings && matchStandings.total >= 10) {
+    const tot = matchStandings.total;
+    const isClutch = (r) => r <= 4 || r >= tot - 3; // Peleando título/copas o descenso
+    const isChill = (r) => r > 5 && r < tot - 4; // Mitad de tabla
+
+    if (isClutch(matchStandings.homeRank) && isChill(matchStandings.awayRank)) {
+       homeMotivPenalty = -6; // Boost (restamos penalización) de 6 puntos en forma efectiva
+       homeMotivNote = 'Alta motivación (pelea tabla)';
+    } else if (isChill(matchStandings.homeRank) && isClutch(matchStandings.awayRank)) {
+       awayMotivPenalty = -6;
+       awayMotivNote = 'Alta motivación (pelea tabla)';
+    }
+  }
+
+  // Aplicamos todos los ajustes a los promedios de gol y scores de forma
+  const adjHomeAvgGF = Math.max(homeAvgGF - homeInjPenalty - homeRest.goalsPenalty + xGBoostHome, 0.3);
+  const adjAwayAvgGF = Math.max(awayAvgGF - awayInjPenalty  - awayRest.goalsPenalty + xGBoostAway, 0.3);
+  const adjHomeAvgGA = homeAvgGA; // Las defensas no se ven tan afectadas
+  const adjAwayAvgGA = awayAvgGA;
+
+  const projectedGoals = +((adjHomeAvgGF + adjAwayAvgGF + adjHomeAvgGA + adjAwayAvgGA) / 2).toFixed(2);
+
+  // Notas de contexto que se inyectarán en los argumentos de los picks
+  const homeContextNote = [
+    homeInjuries > 0 ? `${homeInjuries} baja(s)` : '',
+    homeRest.label,
+    advancedStats?.home?.xG ? `xG: ${advancedStats.home.xG}` : '',
+    homeMotivNote,
+  ].filter(Boolean).join(', ');
+  const awayContextNote = [
+    awayInjuries > 0 ? `${awayInjuries} baja(s)` : '',
+    awayRest.label,
+    advancedStats?.away?.xG ? `xG: ${advancedStats.away.xG}` : '',
+    awayMotivNote,
+  ].filter(Boolean).join(', ');
+
 
   // Si no hay H2H, redistribuir el peso entre los dos equipos
   const h2hWeight  = h2hData ? 0.25 : 0;
@@ -216,6 +344,25 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
       if (realOdds < 1.01) realOdds = '1.01';
       pick.odds = realOdds;
     }
+
+    // ── #6: Detección de Value Bets (EV+) ─────────────────────────
+    if (marketOdds && !isLive && pick.probability) {
+      let mOdds = null;
+      if (pick.selection === 'Victoria Local' || pick.selection === 'Local -0.5 (Gana sin empate)') mOdds = marketOdds.home;
+      if (pick.selection === 'Victoria Visitante' || pick.selection === 'Visitante -0.5 (Gana sin empate)') mOdds = marketOdds.away;
+      if (pick.selection === 'Empate') mOdds = marketOdds.draw;
+
+      if (mOdds && mOdds > 1.01) {
+        const impliedProb = 100 / mOdds;
+        // Si nuestra probabilidad es mayor a la implícita de la cuota por +5%, es VALUE BET
+        if (pick.probability >= impliedProb + 5) {
+           pick.tier = '💎';
+           pick.argument = `¡VALUE BET! Cuota real paga ${mOdds.toFixed(2)} (implica ${Math.round(impliedProb)}%). Nuestra predicción: ${pick.probability}%. ` + pick.argument;
+           pick.odds = mOdds.toFixed(2); // Mostrar cuota real
+        }
+      }
+    }
+
     picks.push(pick);
   };
 
@@ -225,70 +372,98 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
   if (isLive) {
     const min = parseInt(liveClock) || 0;
     const totalGoals = (liveHomeGoals || 0) + (liveAwayGoals || 0);
-    const homeScoreAdv = homeForm.score - awayForm.score;
+    const liveHomeAdv = homeEffectiveScore - awayEffectiveScore; // usa split+penalizado
 
-    // 1. Gol en el 1er tiempo (si hay 0 goles y se esperan muchos)
+    // Goles restantes esperados (ajustado por tiempo transcurrido)
+    const pctTimeLeft = Math.max(0, (90 - min) / 90);
+    const goalsExpectedRemaining = +(projectedGoals * pctTimeLeft).toFixed(2);
+
+    // 1. Gol en el 1er tiempo (0-0 y queda tiempo)
     if (min >= 15 && min <= 35 && totalGoals === 0 && projectedGoals >= 2.5) {
+      // Prob basada en goles esperados en el tiempo restante del 1T
+      const pctLeft1T = Math.max(0, (45 - min) / 45);
+      const goalsLeft1T = +(projectedGoals * 0.45 * (1 - pctLeft1T * 0.3)).toFixed(2);
+      // P(al menos 1 gol) = 1 - P(0 goles) usando Poisson
+      const p0 = Math.pow(Math.E, -goalsLeft1T);
+      const prob1T = Math.min(Math.round((1 - p0) * 100), 88);
       addPick({
         market: 'Goles en Vivo (1T)',
         selection: 'Más de 0.5 goles en el 1er Tiempo',
-        probability: 70 + min / 2, // Sube la confianza según pasa el tiempo
+        probability: prob1T,
         tier: '🔥',
-        argument: `Minuto ${min} sin goles. Ambos equipos tienen alta tendencia a anotar (${projectedGoals} goles proyectados). Cuota de valor para un gol antes del descanso.`,
-        risk: 'Alto',
+        argument: `Min ${min}' sin goles. Goles esperados 1T restante: ~${goalsLeft1T}. Proyección total: ${projectedGoals}.`,
+        risk: prob1T >= 78 ? 'Moderado' : 'Alto',
       });
     }
 
-    // 2. Gol tardío (0-0 en el min 60+)
-    if (min >= 60 && totalGoals === 0 && projectedGoals > 2.0 && homeAvgGF > 1 && awayAvgGF > 1) {
+    // 2. Gol tardio (0-0 en el min 60+)
+    if (min >= 60 && totalGoals === 0 && projectedGoals > 2.0) {
+      const goalsLeft = +(projectedGoals * pctTimeLeft).toFixed(2);
+      const p0 = Math.pow(Math.E, -goalsLeft);
+      const prob = Math.min(Math.round((1 - p0) * 100), 90);
       addPick({
         market: 'Goles en Vivo',
         selection: 'Más de 0.5 goles',
-        probability: 75,
+        probability: prob,
         tier: '🔥',
-        argument: `Partido cerrado en el minuto ${min}, pero ambos equipos promedian una alta cuota de goles (${projectedGoals} esperados). Alta probabilidad de que se rompa el cero.`,
-        risk: 'Moderado',
+        argument: `Min ${min}' sin goles. Goles esperados restantes: ~${goalsLeft} (de ${projectedGoals} proyectados). Alta presión para romper el cero.`,
+        risk: prob >= 78 ? 'Moderado' : 'Alto',
       });
     }
 
-    // 3. Under de goles en partidos cerrados
+    // 3. Under de goles en partidos muy goleados (min 75+, ya hay 4+)
     if (min >= 75 && totalGoals > 3) {
+      const goalsLeft = +(projectedGoals * pctTimeLeft).toFixed(2);
+      // P(0 o 1 gol más) = P(0) + P(1) con Poisson
+      const p0 = Math.pow(Math.E, -goalsLeft);
+      const p1 = goalsLeft * p0;
+      const probUnder = Math.min(Math.round((p0 + p1) * 100), 88);
       addPick({
         market: 'Goles en Vivo',
         selection: `Menos de ${totalGoals + 1.5} goles`,
-        probability: 85,
+        probability: probUnder,
         tier: '🔥',
-        argument: `Minuto ${min} con ${totalGoals} goles. Estadísticamente el ritmo debe caer y es muy difícil ver dos goles adicionales en el tramo final.`,
+        argument: `Min ${min}' con ${totalGoals} goles. Goles restantes esperados: ~${goalsLeft}. Baja probabilidad de 2+ goles adicionales.`,
         risk: 'Bajo',
       });
     }
 
-    // 4. Remontada del favorito Local
-    if (min >= 45 && homeForm.score >= 65 && awayForm.score <= 45 && homeScoreAdv >= 18) {
+    // 4. Remontada del favorito Local (usa scores efectivos penalizados)
+    if (min >= 45 && liveHomeAdv >= 18 && homeEffectiveScore >= 65) {
       if (liveHomeGoals < liveAwayGoals || liveHomeGoals === liveAwayGoals) {
         addPick({
           market: 'Resultado en Vivo',
           selection: liveHomeGoals < liveAwayGoals ? 'Local empata o gana (1X)' : 'Victoria Local',
-          probability: 72,
+          probability: Math.min(Math.round(homeEffectiveScore * 0.7 + (h2hData?.homeWinPct ?? 50) * 0.3), 80),
           tier: '🔥',
-          argument: `El local es estadísticamente superior (Forma: ${homeForm.score}% vs ${awayForm.score}%) y no está ganando. Gran momento para buscar la remontada o el desempate local en vivo.`,
+          argument: `Local superior (Forma efectiva: ${homeEffectiveScore}% vs ${awayEffectiveScore}%). No está ganando en el min ${min}. Momento de remontada.`,
           risk: 'Moderado',
         });
       }
     }
 
-    // 5. Dinámica de goles sobre la marcha
-    if (min > 20 && min < 65 && totalGoals > 0 && projectedGoals >= 2.8) {
+    // 5. Goles sobre la marcha (partido ya abierto)
+    if (min > 20 && min < 65 && totalGoals > 0 && goalsExpectedRemaining >= 1.0) {
+      const p0 = Math.pow(Math.E, -goalsExpectedRemaining);
+      const probMore = Math.min(Math.round((1 - p0) * 100), 87);
       addPick({
         market: 'Goles en Vivo',
         selection: `Más de ${totalGoals + 0.5} goles`,
-        probability: 78,
+        probability: probMore,
         tier: '🔥',
-        argument: `El partido ya se abrió con ${totalGoals} goles. La tendencia pre-partido sugiere un juego abierto (${projectedGoals} esperados). Debería caer al menos uno más.`,
+        argument: `Min ${min}' con ${totalGoals} gol(es). Quedan ~${goalsExpectedRemaining} goles esperados. Alta probabilidad de más goles.`,
         risk: 'Moderado',
       });
     }
   }
+
+  // ── Boost de confianza desde predicción oficial (API-Football) ──
+  // Suma hasta +8 puntos si la predicción oficial coincide con nuestro análisis
+  const officialHomeWinPct = officialPrediction ? parseInt(officialPrediction.predictions?.percent?.home) || 0 : 0;
+  const officialDrawPct    = officialPrediction ? parseInt(officialPrediction.predictions?.percent?.draw)  || 0 : 0;
+  const officialAwayWinPct = officialPrediction ? parseInt(officialPrediction.predictions?.percent?.away)  || 0 : 0;
+  const officialWinner     = officialPrediction?.predictions?.winner?.comment || '';
+  const hasOfficial        = officialHomeWinPct + officialDrawPct + officialAwayWinPct > 0;
 
   // ── Over 2.5 ──────────────────────────────────────────────────
   const homeOver25Pct  = homeSplitStats?.over25Pct ?? 0;
@@ -296,28 +471,66 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
   const h2hOver25Pct   = h2hData?.over25Pct ?? 0;
   const combinedOver25 = Math.round(homeOver25Pct * teamWeight + awayOver25Pct * teamWeight + h2hOver25Pct * h2hWeight);
 
+  // ── Over 1.5 ──────────────────────────────────────────────────
+  const homeOver15Pct  = homeSplitStats?.over15Pct ?? 0;
+  const awayOver15Pct  = awaySplitStats?.over15Pct ?? 0;
+  // Ahora usamos el dato real del H2H en lugar del proxy *1.2
+  const h2hOver15Pct   = h2hData?.over15Pct ?? (h2hData ? Math.min(Math.round(h2hData.over25Pct * 1.2), 100) : 0);
+  const combinedOver15 = Math.round(homeOver15Pct * teamWeight + awayOver15Pct * teamWeight + h2hOver15Pct * h2hWeight);
+  if (combinedOver15 >= 70 && projectedGoals >= 1.6) {
+    const prob = Math.min(combinedOver15, 91);
+    addPick({
+      market: 'Total de Goles',
+      selection: 'Más de 1.5 goles',
+      probability: prob,
+      tier: prob >= 85 ? '🟢' : '🔵',
+      argument: `${combinedOver15}% de partidos con 2+ goles. Proyección: ${projectedGoals} goles. Mercado de menor riesgo.`,
+      risk: prob >= 85 ? 'Bajo' : 'Moderado',
+    });
+  }
+
+  // ── Over 2.5 ──────────────────────────────────────────────────
   if (combinedOver25 >= 60 && projectedGoals >= 2.3) {
-    const prob = Math.min(combinedOver25 + 6, 88);
+    const officialBoost = hasOfficial && officialWinner?.toLowerCase().includes('goals') ? 4 : 0;
+    const prob = Math.min(combinedOver25 + officialBoost, 88);
+    const ctxNote = [homeContextNote, awayContextNote].filter(Boolean).join(' · ');
     addPick({
       market: 'Total de Goles',
       selection: 'Más de 2.5 goles',
       probability: prob,
       tier: prob >= 82 ? '🟢' : '🔵',
-      argument: `Probabilidad de más de 2 goles: ${combinedOver25}%. Goles proyectados: ${projectedGoals}. Local promedia ${homeAvgGF} a favor. Visitante promedia ${awayAvgGF} a favor.`,
+      argument: `${combinedOver25}% de partidos con 3+ goles. Proyección ajustada: ${projectedGoals} goles.${ctxNote ? ` Contexto: ${ctxNote}.` : ''}`,
       risk: prob >= 82 ? 'Bajo' : 'Moderado',
+    });
+  }
+
+  // ── Over 3.5 ──────────────────────────────────────────────────
+  const homeOver35Pct  = homeSplitStats?.over35Pct ?? 0;
+  const awayOver35Pct  = awaySplitStats?.over35Pct ?? 0;
+  const h2hOver35Pct   = h2hData ? Math.round(h2hData.over25Pct * 0.6) : 0; // proxy conservador
+  const combinedOver35 = Math.round(homeOver35Pct * teamWeight + awayOver35Pct * teamWeight + h2hOver35Pct * h2hWeight);
+  if (combinedOver35 >= 55 && projectedGoals >= 3.0) {
+    const prob = Math.min(combinedOver35, 84);
+    addPick({
+      market: 'Total de Goles',
+      selection: 'Más de 3.5 goles',
+      probability: prob,
+      tier: prob >= 75 ? '🔵' : '🟡',
+      argument: `${combinedOver35}% de partidos con 4+ goles. Proyección: ${projectedGoals} goles. Partido con alto potencial ofensivo.`,
+      risk: 'Alto',
     });
   }
 
   // ── Under 2.5 ─────────────────────────────────────────────────
   const under25Pct = 100 - combinedOver25;
   if (under25Pct >= 62 && projectedGoals < 2.2) {
-    const prob = Math.min(under25Pct + 4, 86);
+    const prob = Math.min(under25Pct, 86);
     addPick({
       market: 'Total de Goles',
       selection: 'Menos de 2.5 goles',
       probability: prob,
       tier: prob >= 82 ? '🟢' : '🔵',
-      argument: `Probabilidad de pocos goles: ${under25Pct}%. Goles proyectados: ${projectedGoals}. Se espera un partido muy defensivo.`,
+      argument: `${under25Pct}% de probabilidad de partido cerrado. Proyección: ${projectedGoals} goles. Defensa sólida de ambos equipos.`,
       risk: prob >= 82 ? 'Bajo' : 'Moderado',
     });
   }
@@ -329,29 +542,72 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
   const combinedBTTS = Math.round(homeBttsPct * teamWeight + awayBttsPct * teamWeight + h2hBttsPct * h2hWeight);
 
   if (combinedBTTS >= 58) {
-    const prob = Math.min(combinedBTTS + 5, 87);
+    const prob = Math.min(combinedBTTS, 87);
     addPick({
       market: 'Ambos Marcan',
       selection: 'Sí, ambos anotan',
       probability: prob,
       tier: prob >= 82 ? '🟢' : '🔵',
-      argument: `Probabilidad de que ambos marquen: ${combinedBTTS}%. Local anota frecuentemente y el visitante también tiene buen promedio de gol.`,
+      argument: `${combinedBTTS}% de partidos con gol de ambos equipos. Local anota ${homeAvgGF}/p, Visitante ${awayAvgGF}/p.`,
       risk: prob >= 82 ? 'Bajo' : 'Moderado',
     });
   }
 
+  // ── BTTS + Over 2.5 (Combo) ────────────────────────────────────
+  if (combinedBTTS >= 62 && combinedOver25 >= 60 && projectedGoals >= 2.5) {
+    const prob = Math.min(Math.round((combinedBTTS + combinedOver25) / 2) - 5, 80);
+    if (prob >= 62) {
+      addPick({
+        market: 'Combo',
+        selection: 'Ambos Marcan + Más de 2.5',
+        probability: prob,
+        tier: '🔵',
+        argument: `BTTS: ${combinedBTTS}% · Over 2.5: ${combinedOver25}%. Alta probabilidad de partido abierto con gol de ambos y 3+ goles en total.`,
+        risk: 'Moderado',
+      });
+    }
+  }
+
   // ── Ganador: Local ─────────────────────────────────────────────
   const homeScoreAdv = homeForm.score - awayForm.score;
+  // Usa forma en casa del local con penalizaciones de lesión, cansancio y motivación aplicadas
+  const homeEffectiveScore = Math.max(
+    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score) - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty, 0
+  );
+  const awayEffectiveScore = Math.max(
+    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score) - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty, 0
+  );
+  const effectiveAdv = homeEffectiveScore - awayEffectiveScore;
 
-  if (homeForm.score >= 65 && awayForm.score <= 45 && homeScoreAdv >= 18) {
-    const prob = Math.min(Math.round(homeForm.score * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4), 84);
+  const officialHomeBoost = hasOfficial && officialHomeWinPct >= 55 ? Math.round((officialHomeWinPct - 50) * 0.2) : 0;
+  const officialAwayBoost = hasOfficial && officialAwayWinPct >= 55 ? Math.round((officialAwayWinPct - 50) * 0.2) : 0;
+
+  // Pick de EMPATE desde Poisson (dato real, no inventado)
+  if (!isLive && poissonProbs && poissonProbs.draw >= 30 && (h2hData?.drawPct ?? 0) >= 25) {
+    const drawProb = Math.round(poissonProbs.draw * 0.6 + (h2hData?.drawPct ?? 25) * 0.4);
+    if (drawProb >= 28 && drawProb <= 50) { // solo si es genuinamente probable
+      addPick({
+        market: 'Ganador del Partido',
+        selection: 'Empate',
+        probability: drawProb,
+        tier: drawProb >= 38 ? '🟡' : '🟡',
+        argument: `Poisson indica ${poissonProbs.draw.toFixed(1)}% de empate. H2H: ${h2hData?.drawPct ?? '?'}% de empates históricos. Cuota de valor en mercados equilibrados.`,
+        risk: 'Alto',
+        units: '1-2u',
+      });
+    }
+  }
+
+  if (homeEffectiveScore >= 65 && awayEffectiveScore <= 45 && effectiveAdv >= 18) {
+    const prob = Math.min(Math.round(homeEffectiveScore * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4) + officialHomeBoost, 86);
     if (prob >= 62) {
+      const splitNote = homeFormAtHome?.total >= 3 ? ` (Casa: ${homeFormAtHome.wins}G/${homeFormAtHome.total}PJ)` : '';
       addPick({
         market: 'Ganador del Partido',
         selection: 'Victoria Local',
         probability: prob,
         tier: prob >= 78 ? '🔵' : '🟡',
-        argument: `Forma local: ${homeForm.score}%. Forma visitante: ${awayForm.score}%. Ventaja: +${homeScoreAdv}pts. Historial local gana: ${h2hData?.homeWinPct ?? '?'}%.`,
+        argument: `Forma local en casa: ${homeEffectiveScore}%${splitNote}. Visitante fuera: ${awayEffectiveScore}%. Ventaja: +${effectiveAdv}pts. H2H: ${h2hData?.homeWinPct ?? '?'}%.${hasOfficial ? ` Oficial: ${officialHomeWinPct}%.` : ''}`,
         risk: 'Moderado',
         units: '3-5u',
       });
@@ -359,49 +615,44 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
   }
 
   // ── Ganador: Visitante ─────────────────────────────────────────
-  if (awayForm.score >= 65 && homeForm.score <= 45 && -homeScoreAdv >= 18) {
-    const prob = Math.min(Math.round(awayForm.score * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4), 84);
+  if (awayEffectiveScore >= 65 && homeEffectiveScore <= 45 && -effectiveAdv >= 18) {
+    const prob = Math.min(Math.round(awayEffectiveScore * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4) + officialAwayBoost, 86);
     if (prob >= 62) {
+      const splitNote = awayFormAway?.total >= 3 ? ` (Fuera: ${awayFormAway.wins}G/${awayFormAway.total}PJ)` : '';
       addPick({
         market: 'Ganador del Partido',
         selection: 'Victoria Visitante',
         probability: prob,
         tier: prob >= 78 ? '🔵' : '🟡',
-        argument: `Forma visitante: ${awayForm.score}%. Forma local: ${homeForm.score}%. Historial visitante gana: ${h2hData?.awayWinPct ?? '?'}%.`,
-        risk: 'Moderado',
-        units: '3-5u',
-      });
-    }
-  }
-
-  // ── Doble Oportunidad: Local o Empate (1X) ─────────────────────
-  if (homeForm.score >= 55 && homeForm.score < 68) {
-    const base = h2hData ? (h2hData.homeWinPct + h2hData.drawPct) : 60;
-    const prob = Math.min(Math.round((homeForm.score + base) / 2), 82);
-    if (prob >= 66) {
+        argument: `Forma visitante fuera: ${awayEffectiveScore}%${splitNote}. Local en casa: ${homeEffectiveScore}%. H2H: ${h2hData?.awayWinPct ?? '?'}%.${hasOffic  // ── Doble Oportunidad: Local o Empate (1X) ────────────────────
+  // Usamos Poisson: prob 1X = P(local gana) + P(empate)
+  if (!isLive && poissonProbs) {
+    const prob1X = Math.round(poissonProbs.home + poissonProbs.draw);
+    const h2hBase1X = h2hData ? (h2hData.homeWinPct + h2hData.drawPct) : prob1X;
+    const combined1X = Math.round(prob1X * 0.6 + h2hBase1X * 0.4);
+    // Solo si el local es moderadamente favorito (no dominante, que ya tiene Victoria Local)
+    if (combined1X >= 60 && combined1X < 80 && poissonProbs.home < 55) {
       addPick({
         market: 'Doble Oportunidad',
         selection: 'Local o Empate (1X)',
-        probability: prob,
+        probability: Math.min(combined1X, 82),
         tier: '🔵',
-        argument: `Forma local sólida (${homeForm.score}%) pero no dominante. 1X asegura que ganamos si el local gana o empata.`,
+        argument: `Poisson: Local ${poissonProbs.home.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}% = ${prob1X}% de 1X. H2H 1X: ${h2hBase1X}%. Protección ante el empate.`,
         risk: 'Bajo',
         units: '3-4u',
       });
     }
-  }
 
-  // ── Doble Oportunidad: Visitante o Empate (X2) ─────────────────
-  if (awayForm.score >= 55 && awayForm.score < 68) {
-    const base = h2hData ? (h2hData.awayWinPct + h2hData.drawPct) : 60;
-    const prob = Math.min(Math.round((awayForm.score + base) / 2), 82);
-    if (prob >= 66) {
+    const probX2 = Math.round(poissonProbs.away + poissonProbs.draw);
+    const h2hBaseX2 = h2hData ? (h2hData.awayWinPct + h2hData.drawPct) : probX2;
+    const combinedX2 = Math.round(probX2 * 0.6 + h2hBaseX2 * 0.4);
+    if (combinedX2 >= 60 && combinedX2 < 80 && poissonProbs.away < 55) {
       addPick({
         market: 'Doble Oportunidad',
         selection: 'Visitante o Empate (X2)',
-        probability: prob,
+        probability: Math.min(combinedX2, 82),
         tier: '🔵',
-        argument: `Forma visitante sólida (${awayForm.score}%) pero no dominante. X2 asegura que ganamos si la visita gana o empata.`,
+        argument: `Poisson: Visitante ${poissonProbs.away.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}% = ${probX2}% de X2. H2H X2: ${h2hBaseX2}%. Protección ante el empate.`,
         risk: 'Bajo',
         units: '3-4u',
       });
@@ -443,12 +694,93 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
     }
   }
 
-  // Filtro: solo picks con tier definido y probabilidad mínima
-  const filtered = picks.filter(p => p.tier && p.probability >= 62);
+  // ── Corners del partido (ambos equipos) ────────────────────────
+  if (homeCornersData && awayCornersData && homeCornersData.matches >= 4 && awayCornersData.matches >= 4) {
+    const combinedAvgCorners = parseFloat(homeCornersData.avg) + parseFloat(awayCornersData.avg);
+    const over8Pct = Math.round(
+      ((homeCornersData.over4 / homeCornersData.matches) * 0.5 +
+       (awayCornersData.over4 / awayCornersData.matches) * 0.5) * 100
+    );
+    const over10Pct = Math.round(
+      ((homeCornersData.over5 / homeCornersData.matches) * 0.5 +
+       (awayCornersData.over5 / awayCornersData.matches) * 0.5) * 100
+    );
+    if (over8Pct >= 60 && combinedAvgCorners >= 8) {
+      addPick({
+        market: 'Córners Totales',
+        selection: 'Más de 8.5 córners',
+        probability: Math.min(over8Pct, 84),
+        tier: over8Pct >= 75 ? '🔵' : '🟡',
+        argument: `Promedio combinado de córners: ${combinedAvgCorners.toFixed(1)}/p. Local: ${homeCornersData.avg}/p · Visitante: ${awayCornersData.avg}/p. El ${over8Pct}% de sus partidos superan esta línea.`,
+        risk: over8Pct >= 75 ? 'Moderado' : 'Alto',
+      });
+    }
+    if (over10Pct >= 55 && combinedAvgCorners >= 10) {
+      addPick({
+        market: 'Córners Totales',
+        selection: 'Más de 10.5 córners',
+        probability: Math.min(over10Pct, 80),
+        tier: '🟡',
+        argument: `${over10Pct}% de partidos con 11+ córners combinados. Promedio: ${combinedAvgCorners.toFixed(1)}/p.`,
+        risk: 'Alto',
+      });
+    }
+  }
+
+  // ── Tarjetas del partido (ambos equipos) ────────────────────────
+  if (homeCardsData && awayCardsData && homeCardsData.matches >= 4 && awayCardsData.matches >= 4) {
+    const combinedAvgCards = parseFloat(homeCardsData.avg) + parseFloat(awayCardsData.avg);
+    const over3CardsPct = Math.round(
+      ((homeCardsData.over2 / homeCardsData.matches) * 0.5 +
+       (awayCardsData.over2 / awayCardsData.matches) * 0.5) * 100
+    );
+    if (over3CardsPct >= 60 && combinedAvgCards >= 3) {
+      addPick({
+        market: 'Tarjetas Totales',
+        selection: 'Más de 3.5 tarjetas',
+        probability: Math.min(over3CardsPct, 82),
+        tier: over3CardsPct >= 72 ? '🔵' : '🟡',
+        argument: `Promedio combinado de tarjetas: ${combinedAvgCards.toFixed(1)}/p. El ${over3CardsPct}% de sus partidos registran 4+ tarjetas.`,
+        risk: 'Moderado',
+      });
+    }
+  }
+
+  // ── Gol en el 2do Tiempo (datos de tramos) ──────────────────────
+  if (!isLive && homeSlots && awaySlots) {
+    const home2T = (homeSlots[3]?.goals || 0) + (homeSlots[4]?.goals || 0) + (homeSlots[5]?.goals || 0);
+    const away2T = (awaySlots[3]?.goals || 0) + (awaySlots[4]?.goals || 0) + (awaySlots[5]?.goals || 0);
+    const total2T = home2T + away2T;
+    const total1T = (homeSlots[0]?.goals||0)+(homeSlots[1]?.goals||0)+(homeSlots[2]?.goals||0)
+                  + (awaySlots[0]?.goals||0)+(awaySlots[1]?.goals||0)+(awaySlots[2]?.goals||0);
+    if (total2T > 0 && total1T > 0) {
+      const pct2T = Math.round(total2T / (total2T + total1T) * 100);
+      if (pct2T >= 58 && projectedGoals >= 2.0) {
+        addPick({
+          market: 'Gol por Tramo',
+          selection: 'Gol en el 2do Tiempo',
+          probability: Math.min(pct2T + 10, 85),
+          tier: '🔵',
+          argument: `El ${pct2T}% de los goles de estos equipos caen en la 2ª mitad. Alta probabilidad de actividad goleadora en el tramo 46'–90'.`,
+          risk: 'Moderado',
+        });
+      }
+    }
+  }
+
+  // Filtro: picks con tier definido y probabilidad >= umbral dinámico por muestra
+  const filtered = picks.filter(p => p.tier && p.probability >= dynamicMinProb);
   filtered.sort((a, b) => b.probability - a.probability);
 
+  // ── Límite: máximo 5 picks para no saturar al usuario ─────────
+  // Se separan picks de estrategia en vivo (🔥) para siempre incluirlos
+  const livePicks   = filtered.filter(p => p.tier === '🔥');
+  const staticPicks = filtered.filter(p => p.tier !== '🔥');
+  const topStatic   = staticPicks.slice(0, 4);
+  const finalPicks  = [...topStatic, ...livePicks.slice(0, 1)];
+
   return {
-    picks: filtered,
+    picks: finalPicks,
     projectedGoals,
     homeAvgGF,
     homeAvgGA,
@@ -456,7 +788,9 @@ export function generatePicks({ homeStats, awayStats, h2hData, homeForm, awayFor
     awayAvgGA,
     combinedOver25,
     combinedBTTS,
-    reason: filtered.length === 0 ? 'No se encontró ventaja estadística clara. No se recomienda apostar.' : null,
+    homeFormAtHome,
+    awayFormAway,
+    reason: finalPicks.length === 0 ? 'No se encontró ventaja estadística clara. No se recomienda apostar.' : null,
   };
 }
 
