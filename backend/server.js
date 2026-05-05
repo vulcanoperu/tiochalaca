@@ -517,13 +517,27 @@ app.post('/api/auth/google', async (req, res) => {
 
     if (!dbUser) {
       // Crear usuario nuevo desde Google
-      const username = fullName.replace(/\s+/g, '_').toLowerCase();
-      const { data: newUser, error: insertErr } = await supabase.from('users')
-        .insert([{ username, email, google_id: googleId, avatar_url: avatarUrl, password: '', role: 'pending' }])
-        .select()
-        .single();
-      if (insertErr) throw insertErr;
-      dbUser = newUser;
+      let username = fullName.replace(/\s+/g, '_').toLowerCase();
+      // Asegurar que el username es único intentando insertarlo, si falla, añadir random
+      let insertErr = null;
+      let newUser = null;
+      
+      const insertAttempt = async (uname) => {
+        return await supabase.from('users')
+          .insert([{ username: uname, email, google_id: googleId, avatar_url: avatarUrl, password: '', role: 'pending' }])
+          .select()
+          .single();
+      };
+
+      let attempt = await insertAttempt(username);
+      if (attempt.error && (attempt.error.code === '23505' || attempt.error.message.includes('duplicate'))) {
+        // Colisión de username, añadir random
+        username = `${username}_${Math.floor(Math.random() * 10000)}`;
+        attempt = await insertAttempt(username);
+      }
+
+      if (attempt.error) throw attempt.error;
+      dbUser = attempt.data;
     } else if (!dbUser.google_id) {
       // Vincular cuenta existente con Google
       await supabase.from('users').update({ google_id: googleId, avatar_url: avatarUrl, email }).eq('id', dbUser.id);
@@ -536,8 +550,8 @@ app.post('/api/auth/google', async (req, res) => {
     );
     res.json({ token, user: { id: dbUser.id, username: dbUser.username, role: dbUser.role, avatar_url: avatarUrl } });
   } catch (e) {
-    console.error('[Google Auth]', e.message);
-    res.status(500).json({ error: 'Error en autenticación con Google' });
+    console.error('[Google Auth]', e.message, e);
+    res.status(500).json({ error: 'Error en autenticación con Google', details: e.message || e.toString() });
   }
 });
 

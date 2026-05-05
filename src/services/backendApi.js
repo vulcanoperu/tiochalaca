@@ -126,7 +126,9 @@ export async function loginWithGoogle(access_token) {
     }
     return { success: false, error: 'No se recibió token' };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    const detail = err.response?.data?.details;
+    const msg = err.response?.data?.error || err.message;
+    return { success: false, error: detail ? `${msg}: ${detail}` : msg };
   }
 }
 
