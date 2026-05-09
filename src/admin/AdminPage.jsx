@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Trash2, Users, UserPlus, Crown, RefreshCw, ArrowLeft, LogOut, Search, Download, KeySquare } from 'lucide-react';
+import { Shield, Trash2, Users, UserPlus, Crown, RefreshCw, ArrowLeft, LogOut, Search, Download, KeySquare, Activity, MapPin } from 'lucide-react';
 import { fetchAdminUsers, deleteUser, getAuthHeaders, forceResetPassword, logoutUser } from '../services/backendApi';
+import AuditDashboard from './AuditDashboard';
 import { toast } from 'react-hot-toast';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
@@ -48,6 +49,8 @@ export default function AdminPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState({ key: 'created_at', direction: 'desc' });
   const [expandedRow, setExpandedRow] = useState(null);
+  const [activeTab, setActiveTab] = useState('users');
+  const [ipLocations, setIpLocations] = useState({});
   const navigate = useNavigate();
 
   const currentUser = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
@@ -60,6 +63,30 @@ export default function AdminPage() {
     }, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (expandedRow) {
+      const user = users.find(u => u.id === expandedRow);
+      if (user && user.last_ip && !ipLocations[user.last_ip]) {
+        fetch(`${BACKEND_URL}/api/admin/users/${user.last_ip}/location`, { headers: getAuthHeaders() })
+          .then(res => res.json())
+          .then(data => {
+            if (data.status === 'success' || data.country) {
+              const locationStr = [data.country, data.regionName || data.region, data.city]
+                .filter(Boolean)
+                .join(', ');
+              setIpLocations(prev => ({
+                ...prev,
+                [user.last_ip]: locationStr || 'Ubicación desconocida'
+              }));
+            } else {
+              setIpLocations(prev => ({ ...prev, [user.last_ip]: 'Ubicación desconocida' }));
+            }
+          })
+          .catch(() => setIpLocations(prev => ({ ...prev, [user.last_ip]: 'Error de conexión' })));
+      }
+    }
+  }, [expandedRow, users, ipLocations]);
 
   const loadUsers = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -190,8 +217,28 @@ export default function AdminPage() {
         </button>
       </div>
 
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      {/* Tabs Nav */}
+      <div className="flex border-b border-white/10 mb-4">
+        <button 
+          onClick={() => setActiveTab('users')}
+          className={`flex items-center gap-2 px-6 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'users' ? 'border-purple-400 text-purple-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+        >
+          <Users size={16} /> Usuarios
+        </button>
+        <button 
+          onClick={() => setActiveTab('audit')}
+          className={`flex items-center gap-2 px-6 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'audit' ? 'border-accent-green text-accent-green' : 'border-transparent text-slate-400 hover:text-white'}`}
+        >
+          <Activity size={16} /> Auditoría (Laboratorio)
+        </button>
+      </div>
+
+      {activeTab === 'audit' && <AuditDashboard />}
+
+      {activeTab === 'users' && (
+        <>
+          {/* Header */}
+          <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl flex items-center justify-center"
             style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)' }}>
@@ -425,6 +472,12 @@ export default function AdminPage() {
                             <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 font-bold">Sesión y Dispositivo</p>
                             <p className="text-xs text-slate-300"><span className="text-slate-500">Última IP:</span> {u.last_ip || 'Desconocida'}</p>
                             <p className="text-xs text-slate-300 mt-1"><span className="text-slate-500">Último Acceso:</span> {u.last_login ? new Date(u.last_login).toLocaleString('es-PE') : 'Nunca'}</p>
+                            {u.last_ip && (
+                              <p className="text-xs text-slate-300 mt-1 flex items-start gap-1">
+                                <MapPin size={12} className="text-accent-green shrink-0 mt-0.5" />
+                                <span className="text-slate-500">Ubicación:</span> {ipLocations[u.last_ip] || <RefreshCw size={10} className="animate-spin inline text-slate-500 ml-1" />}
+                              </p>
+                            )}
                           </div>
                           <div className="glass-card p-3" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
                             <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 font-bold">Estadísticas de Picks</p>
@@ -457,6 +510,8 @@ export default function AdminPage() {
           )}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

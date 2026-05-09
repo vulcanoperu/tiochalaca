@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────────
 //  analysisEngine.js
 //  Motor de análisis tipster profesional
+//  Fuente de datos: ESPN (gratuito, sin API keys)
 // ─────────────────────────────────────────────────────────────────
 
 /**
@@ -248,25 +249,60 @@ export function isDerbyMatch(home, away) {
 
 /**
  * Motor principal de generación de picks
- * v2 — Mercados extendidos + integración de predicción oficial
- * @param {object} officialPrediction - Predicción de API-Football (opcional)
- * @param {object} homeCornersData    - { avg, over3, over4, over5, matches }
- * @param {object} awayCornersData    - { avg, over3, over4, over5, matches }
- * @param {object} homeCardsData      - { avg, over1, over2, over3, matches }
- * @param {object} awayCardsData      - { avg, over1, over2, over3, matches }
- * @param {object} homeSlots          - Goles por tramo (analyzeGoalsByTimeSlot)
- * @param {object} awaySlots          - Goles por tramo
- * @param {Array}  injuries           - Lista de bajas del partido [{team:{name}, player:{name}}]
- * @param {string} homeTeamName       - Nombre del equipo local (para filtrar lesiones)
- * @param {string} awayTeamName       - Nombre del equipo visitante
- * @param {number} homeRestDays       - Días desde el último partido del local
- * @param {number} awayRestDays       - Días desde el último partido del visitante
+ * v3 — Mercados extendidos + ESPN como fuente única (gratuita)
+ * @param {object} marketInsight   - Cuotas/predicción del PickCenter de ESPN (opcional)
+ * @param {object} homeCornersData - { avg, over3, over4, over5, matches }
+ * @param {object} awayCornersData - { avg, over3, over4, over5, matches }
+ * @param {object} homeCardsData   - { avg, over1, over2, over3, matches }
+ * @param {object} awayCardsData   - { avg, over1, over2, over3, matches }
+ * @param {object} homeSlots       - Goles por tramo (analyzeGoalsByTimeSlot)
+ * @param {object} awaySlots       - Goles por tramo
+ * @param {Array}  injuries        - Lista de bajas del partido [{team:{name}, player:{name}}]
+ * @param {string} homeTeamName    - Nombre del equipo local (para filtrar lesiones)
+ * @param {string} awayTeamName    - Nombre del equipo visitante
+ * @param {number} homeRestDays    - Días desde el último partido del local
+ * @param {number} awayRestDays    - Días desde el último partido del visitante
+ * @param {Array}  homeHistory     - Lista de últimos partidos del local (para fatiga)
+ * @param {Array}  awayHistory     - Lista de últimos partidos del visitante
  */
+
+// --- NUEVOS FACTORES DE PREVENCIÓN ---
+const ALTITUDE_CITIES = [
+  'la paz', 'quito', 'cusco', 'bogota', 'bogotá', 'arequipa', 'potosi', 'potosí', 
+  'oruro', 'el alto', 'huancayo', 'cajamarca', 'latacunga', 'riobamba', 'ambato'
+];
+
+const HIERARCHY_TEAMS = [
+  // Argentina
+  'river plate', 'boca juniors', 'racing', 'independiente', 'san lorenzo', 'estudiantes', 'velez',
+  // Brasil
+  'flamengo', 'palmeiras', 'sao paulo', 'são paulo', 'corinthians', 'atletico mg', 'atlético mg', 
+  'gremio', 'grêmio', 'internacional', 'fluminense', 'botafogo', 'cruzeiro'
+];
+
+function checkCalendarFatigue(history) {
+  if (!history || history.length < 3) return false;
+  // Consideramos fatiga si ha jugado 3 partidos en los últimos 8 días
+  const now = new Date();
+  const recentMatches = history.filter(m => {
+    const matchDate = new Date(m.fixture?.date || m.date);
+    const diffDays = (now - matchDate) / 86400000;
+    return diffDays >= 0 && diffDays <= 8;
+  });
+  return recentMatches.length >= 3;
+}
+
+function checkAltitudeRisk(teamName, city) {
+  if (!city) return false;
+  const isAltitudeCity = ALTITUDE_CITIES.some(c => city.toLowerCase().includes(c));
+  const isHierarchyTeam = HIERARCHY_TEAMS.some(t => teamName.toLowerCase().includes(t));
+  return isAltitudeCity && isHierarchyTeam;
+}
 export function generatePicks({
   homeStats, awayStats, h2hData, homeForm, awayForm,
   homeSplitStats, awaySplitStats,
   isLive, liveClock, liveHomeGoals, liveAwayGoals,
-  officialPrediction,
+  marketInsight,          // Cuotas/predicción del PickCenter de ESPN
   homeCornersData, awayCornersData,
   homeCardsData, awayCardsData,
   homeSlots, awaySlots,
@@ -278,6 +314,9 @@ export function generatePicks({
   leagueName = '',
   homeRestDays = null,
   awayRestDays = null,
+  homeHistory = [],
+  awayHistory = [],
+  city = '',
   marketOdds = null,
   matchStandings = null,
   advancedStats = null,
@@ -298,7 +337,17 @@ export function generatePicks({
 
   const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
   const isCupMatch = /cup|copa|taça|pokal|coppa|friendl/i.test(leagueName);
+  const isSudamericana = /sudamericana/i.test(leagueName);
   const isDefensiveLeague = /serie a|primeira liga|portugal|italia/i.test(leagueName);
+
+  // ── #0: Nuevos Factores de Prevención (Fatiga y Altitud) ──────────
+  const homeFatigue = checkCalendarFatigue(homeHistory);
+  const awayFatigue = checkCalendarFatigue(awayHistory);
+  const altitudeRisk = checkAltitudeRisk(awayTeamName, city);
+
+  let homeFatiguePenalty = homeFatigue ? 12 : 0;
+  let awayFatiguePenalty = awayFatigue ? 12 : 0;
+  let altitudePenalty = altitudeRisk ? 15 : 0; // Penalización extra para jerarquía en altura
 
   const homeAvgGF = homeForm.total > 0 ? +(homeForm.goalsFor  / homeForm.total).toFixed(2) : 0;
   const homeAvgGA = homeForm.total > 0 ? +(homeForm.goalsAgainst / homeForm.total).toFixed(2) : 0;
@@ -398,11 +447,16 @@ export function generatePicks({
   const homeScoreAdv = homeForm.score - awayForm.score;
   // Usa forma en casa del local con penalizaciones de lesión, cansancio y motivación aplicadas. Bonifica si es fortaleza.
   let homeEffectiveScore = Math.max(
-    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score) - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty + (isHomeFortress ? 15 : 0), 0
+    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score) - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty - homeFatiguePenalty + (isHomeFortress ? 15 : 0), 0
   );
   let awayEffectiveScore = Math.max(
-    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score) - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty, 0
+    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score) - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty - awayFatiguePenalty - altitudePenalty, 0
   );
+
+  // Penalización Sudamericana: Visitantes sufren más en este torneo (15% extra skeptiscim)
+  if (isSudamericana) {
+    awayEffectiveScore *= 0.85;
+  }
 
   // Penalización Anti-Copas: Si es partido de copa, la estadística del favorito no es confiable por rotaciones
   if (isCupMatch) {
@@ -414,33 +468,85 @@ export function generatePicks({
   const h2hWeight  = h2hData ? 0.10 : 0;
   const teamWeight = h2hData ? 0.45 : 0.5;
 
-  // Helper to add a pick with calculated fair odds
+  // Helper to add a pick with calculated fair odds o cuotas reales de ESPN
   const addPick = (pick) => {
-    if (!pick.odds && pick.probability) {
-      // Calculamos cuota justa aproximada y restamos margen simulado del 5%
+    // 1. Calcular cuota teórica base (y aplicar pisos realistas si ESPN falla)
+    let theoreticalOdds = null;
+    if (pick.probability) {
       let fairOdds = 100 / pick.probability;
-      let realOdds = (fairOdds * 0.95).toFixed(2);
-      // Evitar cuotas menores a 1.01
-      if (realOdds < 1.01) realOdds = '1.01';
-      pick.odds = realOdds;
+      theoreticalOdds = +(fairOdds * 0.95).toFixed(2);
+      
+      // Aplicar pisos de mercado realista si no tenemos cuota de ESPN
+      if (pick.selection === 'Más de 1.5 goles' && theoreticalOdds < 1.20) theoreticalOdds = 1.22;
+      if (pick.selection === 'Más de 2.5 goles' && theoreticalOdds < 1.50) theoreticalOdds = 1.55;
+      if (pick.selection === 'Menos de 2.5 goles' && theoreticalOdds < 1.40) theoreticalOdds = 1.45;
+      if (pick.selection === 'Menos de 3.5 goles' && theoreticalOdds < 1.15) theoreticalOdds = 1.18;
+      if (pick.selection.includes('empata o gana') && theoreticalOdds < 1.15) theoreticalOdds = 1.18; // Doble Op
+      if (pick.market === 'Ganador del Partido' && theoreticalOdds < 1.30) theoreticalOdds = 1.35;
+      
+      if (theoreticalOdds < 1.05) theoreticalOdds = 1.05;
     }
+    
+    let finalOdds = theoreticalOdds;
+    let isValueBet = false;
+    let realMOdds = null;
 
-    // ── #6: Detección de Value Bets (EV+) ─────────────────────────
-    if (marketOdds && !isLive && pick.probability) {
-      let mOdds = null;
+    // 2. Si hay cuotas reales de ESPN, intentar reemplazar o derivar
+    if (marketOdds && pick.probability) {
+      // Evitar que cuotas pre-partido sobrescriban mercados en vivo
+      const isPreMatchMarket = ['Total de Goles', 'Ganador del Partido', 'Handicap Asiático', 'Doble Oportunidad'].includes(pick.market);
+      
+      if (isPreMatchMarket) {
+        let mOdds = null;
+      
+      // Mercados Directos
       if (pick.selection === 'Victoria Local' || pick.selection === 'Local -0.5 (Gana sin empate)') mOdds = marketOdds.home;
       if (pick.selection === 'Victoria Visitante' || pick.selection === 'Visitante -0.5 (Gana sin empate)') mOdds = marketOdds.away;
       if (pick.selection === 'Empate') mOdds = marketOdds.draw;
-
-      if (mOdds && mOdds > 1.01) {
-        const impliedProb = 100 / mOdds;
-        // Si nuestra probabilidad es mayor a la implícita de la cuota por +5%, es VALUE BET
-        if (pick.probability >= impliedProb + 5) {
-           pick.tier = '💎';
-           pick.argument = `¡VALUE BET! Cuota real paga ${mOdds.toFixed(2)} (implica ${Math.round(impliedProb)}%). Nuestra predicción: ${pick.probability}%. ` + pick.argument;
-           pick.odds = mOdds.toFixed(2); // Mostrar cuota real
+      
+      // Goles (Directos)
+      if (marketOdds.overUnder === 2.5) {
+        if (pick.selection === 'Más de 2.5 goles') mOdds = marketOdds.overOdds;
+        if (pick.selection === 'Menos de 2.5 goles') mOdds = marketOdds.underOdds;
+        
+        // Goles (Derivados)
+        if (pick.selection === 'Más de 1.5 goles' && marketOdds.overOdds) {
+           // Aproximación estándar de O1.5 basado en O2.5
+           // Usualmente si O2.5 es 2.05, O1.5 es 1.35
+           mOdds = 1 + ((marketOdds.overOdds - 1) * 0.35);
+           if (mOdds < 1.1) mOdds = 1.15;
+        }
+        if (pick.selection === 'Más de 3.5 goles' && marketOdds.overOdds) {
+           mOdds = 1 + ((marketOdds.overOdds - 1) * 2.8);
         }
       }
+
+      // Doble Oportunidad (Derivada)
+      // Cuota 1X = (Local * Empate) / (Local + Empate)
+      if (pick.selection === 'Local empata o gana (1X)' && marketOdds.home && marketOdds.draw) {
+        mOdds = (marketOdds.home * marketOdds.draw) / (marketOdds.home + marketOdds.draw);
+      }
+      if (pick.selection === 'Visitante empata o gana (X2)' && marketOdds.away && marketOdds.draw) {
+        mOdds = (marketOdds.away * marketOdds.draw) / (marketOdds.away + marketOdds.draw);
+      }
+
+      if (mOdds && mOdds > 1.01) {
+        realMOdds = mOdds;
+        finalOdds = mOdds;
+        
+        const impliedProb = 100 / mOdds;
+        // Detección de Value Bet: Si nuestra probabilidad es mucho mayor que la que asume la casa de apuestas
+        if (pick.probability >= impliedProb + 5) {
+           isValueBet = true;
+           pick.tier = '💎';
+           pick.argument = `¡VALUE BET! El mercado paga ${mOdds.toFixed(2)} (implica ${Math.round(impliedProb)}%). Nosotros proyectamos ${pick.probability}%. ` + pick.argument;
+        }
+      }
+    }
+    }
+
+    if (!pick.odds) {
+      pick.odds = finalOdds ? finalOdds.toFixed(2) : '1.80+';
     }
 
     picks.push(pick);
@@ -537,12 +643,12 @@ export function generatePicks({
     }
   }
 
-  // ── Boost de confianza desde predicción oficial (API-Football) ──
-  // Suma hasta +8 puntos si la predicción oficial coincide con nuestro análisis
-  const officialHomeWinPct = officialPrediction ? parseInt(officialPrediction.predictions?.percent?.home) || 0 : 0;
-  const officialDrawPct    = officialPrediction ? parseInt(officialPrediction.predictions?.percent?.draw)  || 0 : 0;
-  const officialAwayWinPct = officialPrediction ? parseInt(officialPrediction.predictions?.percent?.away)  || 0 : 0;
-  const officialWinner     = officialPrediction?.predictions?.winner?.comment || '';
+  // ── Boost de confianza desde datos de cuotas (ESPN PickCenter) ──
+  // Suma hasta +8 puntos si las cuotas de mercado coinciden con nuestro análisis
+  const officialHomeWinPct = marketInsight ? parseInt(marketInsight.predictions?.percent?.home) || 0 : 0;
+  const officialDrawPct    = marketInsight ? parseInt(marketInsight.predictions?.percent?.draw)  || 0 : 0;
+  const officialAwayWinPct = marketInsight ? parseInt(marketInsight.predictions?.percent?.away)  || 0 : 0;
+  const officialWinner     = marketInsight?.predictions?.winner?.comment || '';
   const hasOfficial        = officialHomeWinPct + officialDrawPct + officialAwayWinPct > 0;
 
   // ── Over 2.5 ──────────────────────────────────────────────────
@@ -558,8 +664,11 @@ export function generatePicks({
   const h2hOver15Pct   = h2hData?.over15Pct ?? (h2hData ? Math.min(Math.round(h2hData.over25Pct * 1.2), 100) : 0);
   const combinedOver15 = Math.round(homeOver15Pct * teamWeight + awayOver15Pct * teamWeight + h2hOver15Pct * h2hWeight);
   
-  const over15Threshold = isDefensiveLeague ? 2.3 : 1.8;
-  if (combinedOver15 >= 78 && projectedGoals >= over15Threshold) {
+  const isDeepDefensiveLeague = /arg|uru|sudamericana/i.test(leagueName);
+  const over15Threshold = isDeepDefensiveLeague ? 2.5 : (isDefensiveLeague ? 2.3 : 1.8);
+  const requiredCombinedOver15 = isDeepDefensiveLeague ? 85 : 78;
+  
+  if (combinedOver15 >= requiredCombinedOver15 && projectedGoals >= over15Threshold) {
     const prob = Math.min(combinedOver15, 91);
     if (prob >= 78) {
       addPick({
@@ -645,7 +754,7 @@ export function generatePicks({
   }
 
   // ── BTTS + Over 2.5 (Combo) ────────────────────────────────────
-  if (combinedBTTS >= 62 && combinedOver25 >= 60 && projectedGoals >= 2.5) {
+  if (combinedBTTS >= 68 && combinedOver25 >= 65 && projectedGoals >= 2.6 && awayAvgGF > 1.1) {
     const prob = Math.min(Math.round((combinedBTTS + combinedOver25) / 2) - 5, 80);
     if (prob >= 62) {
       addPick({
@@ -894,7 +1003,10 @@ export function generatePicks({
   let filtered = picks.filter(p => p.tier && p.probability >= dynamicMinProb);
 
   // ── FILTRO ANTI-CLÁSICOS (SNIPER MODE) ────────────────────────
-  if (isDerby && !isLive) {
+  // Bypass si ambos equipos son máquinas ofensivas en el momento (para evitar falsos Under en derbis rotos)
+  const bothTeamsScoringWell = (advancedStats?.home?.xG >= 1.8 && advancedStats?.away?.xG >= 1.8) || (homeAvgGF >= 1.8 && awayAvgGF >= 1.8);
+
+  if (isDerby && !isLive && !bothTeamsScoringWell) {
     // Si es un derbi pre-match, bloqueamos todos los mercados especulativos (Victorias, Ambos Anotan, Overs)
     filtered = filtered.filter(p => 
       p.selection.includes('Menos de 2.5') || 

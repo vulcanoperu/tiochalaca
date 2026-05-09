@@ -51,8 +51,14 @@ export async function checkBackendHealth() {
 //    Devuelve fixtures ya normalizados
 // ─────────────────────────────────────────────────────────────────────
 export async function getTodayFixturesFromBackend(date) {
-  const d = date || new Date().toISOString().split('T')[0];
-  return backendGet('/api/fixtures/today', { date: d });
+  const d = date || new Date().toLocaleDateString('sv-SE');
+  // /fixtures/date/:date is the fully implemented endpoint with caching and league mapping.
+  // /fixtures/today crashes when a ?date= param is passed (mapESPNToApiSports is undefined).
+  return backendGet(`/api/fixtures/date/${d}`);
+}
+
+export async function getMatchAnalysisFromBackend(eventId) {
+  return backendGet(`/api/espn/match/${eventId}/analysis`);
 }
 
 // ─────────────────────────────────────────────────────────────────────

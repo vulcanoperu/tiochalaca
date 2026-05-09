@@ -10,16 +10,11 @@ import {
   FormPills, StatRow, ProbCircle, GoalTimeline, H2HTable, PicksTable, RecentMatchesList
 } from '../components/AnalysisComponents';
 import { useApp } from '../context/AppContext';
-import {
-  getTeamLastMatches, getH2H, getTeamStatistics,
-  getFixtureStatistics, getFixtureEvents, getFixtures,
-  getOfficialPrediction, getInjuries,
-  TOP_LEAGUES,
-} from '../services/footballApi';
-import { getTeamFormFromBackend, getTeamXGFromBackend, getTeamInjuriesFromBackend, getH2HFromBackend, saveDbPick, getAuthHeaders } from '../services/backendApi';
+
+import { saveDbPick } from '../services/backendApi';
 import {
   calculateFormScore, calculateOverUnder, analyzeGoalsByTimeSlot,
-  analyzeH2H, generatePicks, calcMatchProbabilities, analyzeCards
+  analyzeH2H, generatePicks, calcMatchProbabilities,
 } from '../services/analysisEngine';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
@@ -51,11 +46,13 @@ export default function Analysis() {
   const [prediction, setPrediction]   = useState(null);
   const [injuries, setInjuries]       = useState([]);
   const [events, setEvents]           = useState([]);
-  const [loading, setLoading]         = useState(true);
+  const [loading, setLoading]         = useState(true);   // carga inicial del fixture
+  const [loadingAnalysis, setLoadingAnalysis] = useState(false); // carga del análisis (progresiva)
   const [error, setError]             = useState(null);
   const [analysis, setAnalysis]       = useState(null);
   const [picksResult, setPicksResult] = useState(null);
   const [pickSaved, setPickSaved]     = useState(false);
+  const [matchStats, setMatchStats]   = useState(null); // estadísticas reales del partido finalizado
 
 
 
@@ -104,22 +101,57 @@ export default function Analysis() {
     return { home: parseInt(homeStat), away: parseInt(awayStat) };
   }, []);
 
-  const extractTeamCorners = (summaryData, teamIdStr) => {
-    const teams = summaryData?.boxscore?.teams || [];
-    if (!teams[0]?.statistics) return null;
-    const targetTeam = teams.find(t => String(t.team.id) === String(teamIdStr));
-    if (!targetTeam) return null;
-    const stat = targetTeam.statistics?.find(s => s.name === 'wonCorners')?.displayValue || '0';
-    return parseInt(stat);
-  };
+  // TTL del caché de sesión: 5 min para partidos en curso, 4h para terminados/futuros
+  const SESSION_KEY = `chalaca_analysis_${fixtureId}`;
+  const SESSION_TTL_LIVE = 5 * 60 * 1000;
+  const SESSION_TTL_DONE = 4 * 60 * 60 * 1000;
 
   const fetchAll = useCallback(async () => {
     if (!fixtureId) return;
-    setLoading(true);
     setError(null);
+
+    // ── Capa 2: sessionStorage cache ─────────────────────────────────────────
+    // Si el usuario ya analizó este partido en esta sesión, carga INSTANTÁNEO.
     try {
-      // Fetch ESPN Summary with cache-busting to avoid browser caching
-      const summaryRes = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
+      const cached = sessionStorage.getItem(SESSION_KEY);
+      if (cached) {
+        const { ts, fixture: f, homeMatches: hm, awayMatches: am, h2hMatches: h2h,
+                injuries: inj, events: evs, analysis: an, picksResult: pr,
+                isLiveMatch: ilm, elapsedSec } = JSON.parse(cached);
+        
+        // Determinar TTL correcto según el estado
+        const statusShort = f?.fixture?.status?.short;
+        let ttl = SESSION_TTL_DONE; // por defecto 4h (para FT)
+        
+        if (ilm || statusShort === 'LIVE' || statusShort === 'HT') {
+          ttl = SESSION_TTL_LIVE; // 5 min para partidos en vivo
+        } else if (statusShort === 'NS') {
+          ttl = 2 * 60 * 1000; // Solo 2 minutos para NS, porque puede estar por empezar
+        }
+
+        if (Date.now() - ts < ttl) {
+          setFixture(f); setHomeMatches(hm); setAwayMatches(am); setH2HMatches(h2h);
+          setInjuries(inj); setEvents(evs); setAnalysis(an); setPicksResult(pr);
+          if (elapsedSec !== undefined && elapsedSec !== null) {
+            baseRef.current = { serverSec: elapsedSec, startedAt: Date.now() };
+            setIsLiveMatch(true);
+          } else {
+            baseRef.current = null;
+            setIsLiveMatch(false);
+          }
+          setLoading(false);
+          setLoadingAnalysis(false);
+          return; // ¡listo! sin ninguna llamada de red
+        }
+      }
+    } catch (_) { /* sessionStorage no disponible o datos corruptos */ }
+
+    // ── Carga progresiva: fixture primero, análisis después ───────────────────
+    setLoading(true);
+    try {
+      // ── 1. Resumen del partido (status, logos, reloj en vivo) ─────────────
+      // Llamada rápida: solo datos del partido actual (~150ms).
+      const summaryRes = await fetch(`${BACKEND_URL}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
       if (!summaryRes.ok) throw new Error('Error al obtener el partido del proveedor de datos');
       const summary = await summaryRes.json();
 
@@ -152,6 +184,7 @@ export default function Analysis() {
           name: summary.header.league?.name || "Liga",
           id: summary.header.league?.id || "0"
         },
+        city: summary.gameInfo?.venue?.address?.city || null,
         teams: {
           home: { id: homeId, name: homeComp.team.name, logo: homeComp.team.logos?.[0]?.href },
           away: { id: awayId, name: awayComp.team.name, logo: awayComp.team.logos?.[0]?.href }
@@ -164,6 +197,32 @@ export default function Analysis() {
       };
       setFixture(fix);
 
+      // ── Estadísticas finales del partido (solo para partidos concluidos) ──────
+      const isFinished = state === 'post';
+      if (isFinished && summary?.boxscore?.teams?.length) {
+        const getTeamStat = (homeAway, statName) => {
+          const team = summary.boxscore.teams.find(t => t.homeAway === homeAway);
+          if (!team) return null;
+          const stat = team.statistics?.find(s => s.name === statName);
+          return stat ? stat.displayValue : null;
+        };
+        const stats = {
+          possession:    { home: getTeamStat('home', 'possessionPct'),   away: getTeamStat('away', 'possessionPct') },
+          shots:         { home: getTeamStat('home', 'totalShots'),       away: getTeamStat('away', 'totalShots') },
+          shotsOnTarget: { home: getTeamStat('home', 'shotsOnTarget'),    away: getTeamStat('away', 'shotsOnTarget') },
+          corners:       { home: getTeamStat('home', 'wonCorners'),       away: getTeamStat('away', 'wonCorners') },
+          fouls:         { home: getTeamStat('home', 'foulsCommitted'),   away: getTeamStat('away', 'foulsCommitted') },
+          yellowCards:   { home: getTeamStat('home', 'yellowCards'),      away: getTeamStat('away', 'yellowCards') },
+          redCards:      { home: getTeamStat('home', 'redCards'),         away: getTeamStat('away', 'redCards') },
+          offsides:      { home: getTeamStat('home', 'offsides'),         away: getTeamStat('away', 'offsides') },
+        };
+        // Solo guardar si al menos hay un dato útil
+        const hasData = Object.values(stats).some(s => s.home !== null || s.away !== null);
+        if (hasData) setMatchStats(stats);
+      } else {
+        setMatchStats(null);
+      }
+
       // Seed live clock baseline
       if (parsed.elapsedSec !== null) {
         baseRef.current = { serverSec: parsed.elapsedSec, startedAt: Date.now() };
@@ -173,368 +232,124 @@ export default function Analysis() {
         setIsLiveMatch(false);
       }
 
-      // Fetch team schedules (el backend ya filtra por 'post' y combina temporadas)
-      const leagueSlug = summary.header.league?.slug || 'all';
-      const [homeSchRes, awaySchRes] = await Promise.all([
-        fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/team/${homeId}/schedule?league=${leagueSlug}`),
-        fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/team/${awayId}/schedule?league=${leagueSlug}`)
-      ]);
-      const homeSch = await homeSchRes.json();
-      const awaySch = await awaySchRes.json();
+      // ── Capa 3: Carga Progresiva ──────────────────────────────────────────
+      // El fixture ya está en pantalla. Quitamos el spinner principal AHORA
+      // y mostramos un indicador secundario solo para la sección de análisis.
+      setLoading(false);
+      setLoadingAnalysis(true);
 
-      // Función para mapear un evento ESPN al formato del motor de análisis
-      const mapEventToMatch = (ev) => {
-        const comp = ev.competitions?.[0];
-        const homeC = comp?.competitors?.find(c => c.homeAway === 'home');
-        const awayC = comp?.competitors?.find(c => c.homeAway === 'away');
-        // ESPN score puede ser un objeto {value: N} o un número directo
-        const getScore = (c) => { const v = c?.score?.value ?? c?.score ?? 0; return parseInt(v); };
-        // Usa nombre completo (displayName) con fallback a nombre corto
-        const getName = (c) => c?.team?.displayName || c?.team?.name || c?.team?.shortDisplayName || '?';
-        return {
-          fixture: { id: ev.id, date: ev.date, status: { short: 'FT' } },
-          league: { name: ev.league?.name || ev.season?.displayName || 'Desconocido' },
-          teams: { 
-            home: { id: homeC?.id, name: getName(homeC), winner: homeC?.winner }, 
-            away: { id: awayC?.id, name: getName(awayC), winner: awayC?.winner } 
-          },
-          goals: { home: getScore(homeC), away: getScore(awayC) }
-        };
-      };
+      // ── 2. Análisis completo pre-procesado en el backend (1 sola llamada) ──
+      // Si el prefetch de Home.jsx ya corrió, esta respuesta viene del caché
+      // del servidor y llega en ~20ms. Si no, el backend la procesa (~1-3s).
+      const analysisRes = await fetch(`${BACKEND_URL}/api/espn/match/${fixtureId}/analysis`);
+      if (!analysisRes.ok) throw new Error('Error al procesar el análisis del partido');
+      const { data: ad } = await analysisRes.json();
 
-      // El backend devuelve los completados, ordenados desc, máx 20.
-      // Excluimos el partido actual (fixtureId) para que no aparezca en la forma.
-      const enrichMatch = (m, teamId) => {
-        const isHome = String(m.teams?.home?.id) === String(teamId);
-        const winner = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
-        const result = isHome
-          ? winner === 'home' ? 'W' : winner === 'draw' ? 'D' : 'L'
-          : winner === 'away' ? 'W' : winner === 'draw' ? 'D' : 'L';
-        const dateStr = m.fixture?.date
-          ? new Date(m.fixture.date).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: '2-digit' })
-          : '';
-        return {
-          ...m,
-          _isHome: isHome,
-          _opponent: isHome ? m.teams?.away?.name : m.teams?.home?.name,
-          _result: result,
-          _date: dateStr,
-          _league: m.league?.name || '',
-        };
-      };
+      const hm  = ad.homeMatches;
+      const am  = ad.awayMatches;
+      const h2h = ad.h2h;
 
-      const hm = (homeSch.events || [])
-        .filter(e => String(e.id) !== String(fixtureId))
-        .map(e => enrichMatch(mapEventToMatch(e), homeId));
-      const am = (awaySch.events || [])
-        .filter(e => String(e.id) !== String(fixtureId))
-        .map(e => enrichMatch(mapEventToMatch(e), awayId));
-      
       setHomeMatches(hm);
       setAwayMatches(am);
-
-      // Mapear H2H desde summary — usar displayName con fallbacks para nombre completo
-      const h2hEvents = summary.headToHeadGames?.[0]?.events || [];
-      const h2hTeamA = summary.headToHeadGames?.[0]?.team;
-      const resolveName = (obj) =>
-        obj?.displayName || obj?.name || obj?.shortName || obj?.abbreviation || '?';
-      const h2h = h2hEvents.map(e => {
-        const hg = parseInt(e.homeTeamScore ?? 0);
-        const ag = parseInt(e.awayTeamScore ?? 0);
-        
-        const teamA_id = String(h2hTeamA?.id);
-        const teamB_id = String(e.opponent?.id);
-        
-        let homeName = '', awayName = '', homeIdStr = '', awayIdStr = '';
-        if (String(e.homeTeamId) === teamA_id) {
-          homeName  = resolveName(h2hTeamA);
-          homeIdStr = teamA_id;
-          awayName  = resolveName(e.opponent);
-          awayIdStr = teamB_id;
-        } else {
-          homeName  = resolveName(e.opponent);
-          homeIdStr = teamB_id;
-          awayName  = resolveName(h2hTeamA);
-          awayIdStr = teamA_id;
-        }
-
-        return {
-          fixture: { date: e.gameDate, status: { short: 'FT' } },
-          teams: { 
-            home: { id: homeIdStr, name: homeName, winner: hg > ag }, 
-            away: { id: awayIdStr, name: awayName, winner: ag > hg } 
-          },
-          goals: { home: hg, away: ag }
-        };
-      });
       setH2HMatches(h2h);
-
-      // Helper para extraer eventos clave
-      const extractEvents = (summaryData) => {
-        return (summaryData.keyEvents || []).map(e => {
-          const t = e.type?.text || '';
-          const isGoal = t.includes('Goal') || t.includes('Penalty - Scored');
-          const isCard = t.includes('Card');
-          
-          return {
-            type: isGoal ? 'Goal' : (isCard ? 'Card' : 'subst'),
-            detail: t,
-            time: { elapsed: e.clock?.value ? Math.floor(e.clock.value / 60) : parseInt(e.clock?.displayValue) || 0 },
-            team: { id: String(e.team?.id) },
-            player: { name: e.participants?.[0]?.athlete?.displayName }
-          };
-        });
-      };
-
-      // Map events (goles/tarjetas) para los timelines del partido actual (por si está en vivo)
-      const evs = extractEvents(summary);
-      setEvents(evs);
-
-      // Fetch historical summaries para tramos y corners (max 12 partidos por equipo)
-      const fetchHistSummaries = async (matches) => {
-        const ids = matches.slice(0, 12).map(m => m.fixture.id);
-        const results = await Promise.allSettled(ids.map(id => fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/espn/summary/${id}`).then(r => r.json())));
-        return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-      };
-
-      const [homeHistSummaries, awayHistSummaries] = await Promise.all([
-         fetchHistSummaries(hm),
-         fetchHistSummaries(am)
-      ]);
-
-      const homeHistEvs = homeHistSummaries.flatMap(s => extractEvents(s));
-      const awayHistEvs = awayHistSummaries.flatMap(s => extractEvents(s));
-
-      const analyzeCorners = (summaries, teamIdStr) => {
-        const cornersArr = summaries.map(s => extractTeamCorners(s, teamIdStr)).filter(c => c !== null);
-        if (!cornersArr.length) return null;
-        const total = cornersArr.reduce((a, b) => a + b, 0);
-        const avg = (total / cornersArr.length).toFixed(1);
-        const over3 = cornersArr.filter(c => c > 3).length;
-        const over4 = cornersArr.filter(c => c > 4).length;
-        const over5 = cornersArr.filter(c => c > 5).length;
-        const max = Math.max(...cornersArr);
-        return { avg, total, max, matches: cornersArr.length, over3, over4, over5 };
-      };
-
-      const analyzeCardsFromSummaries = (summaries, teamIdStr) => {
-        const yellowArr = [];
-        const redArr    = [];
-
-        summaries.forEach(s => {
-          let yCount = 0, rCount = 0;
-          (s.keyEvents || []).forEach(e => {
-            if (e.type?.text?.includes('Card') && String(e.team?.id) === String(teamIdStr)) {
-              if (e.type?.text?.toLowerCase().includes('red')) rCount++;
-              else yCount++;
-            }
-          });
-          yellowArr.push(yCount);
-          redArr.push(rCount);
-        });
-
-        if (!yellowArr.length) return null;
-
-        const n = yellowArr.length;
-
-        const totalY = yellowArr.reduce((a, b) => a + b, 0);
-        const totalR = redArr.reduce((a, b) => a + b, 0);
-        const total  = totalY + totalR;
-
-        // Yellow independent stats
-        const avgYellow  = (totalY / n).toFixed(2);
-        const over1Y     = yellowArr.filter(c => c > 1).length;
-        const over2Y     = yellowArr.filter(c => c > 2).length;
-        const over3Y     = yellowArr.filter(c => c > 3).length;
-        const maxYellow  = Math.max(...yellowArr);
-
-        // Red independent stats
-        const avgRed     = (totalR / n).toFixed(2);
-        const over0R     = redArr.filter(c => c > 0).length; // partidos con al menos 1 roja
-        const maxRed     = Math.max(...redArr);
-
-        // Combined (for backward-compat with picks engine)
-        const avg  = (total / n).toFixed(1);
-        const over1 = yellowArr.map((y, i) => y + redArr[i]).filter(c => c > 1).length;
-        const over2 = yellowArr.map((y, i) => y + redArr[i]).filter(c => c > 2).length;
-        const over3 = yellowArr.map((y, i) => y + redArr[i]).filter(c => c > 3).length;
-        const max   = Math.max(...yellowArr.map((y, i) => y + redArr[i]));
-
-        return {
-          avg, total, max, matches: n, over1, over2, over3,
-          yellow: totalY, avgYellow, over1Y, over2Y, over3Y, maxYellow,
-          red: totalR,    avgRed,    over0R,              maxRed,
-        };
-      };
-
-      const homeCornersAnalysis = analyzeCorners(homeHistSummaries, homeId);
-      const awayCornersAnalysis = analyzeCorners(awayHistSummaries, awayId);
-      const homeCardsAnalysis = analyzeCardsFromSummaries(homeHistSummaries, homeId);
-      const awayCardsAnalysis = analyzeCardsFromSummaries(awayHistSummaries, awayId);
-
-      // Map injuries (rosters / out)
-      const inj = [];
-      if (summary.rosters) {
-          summary.rosters.forEach(r => {
-              if (r.roster) {
-                  r.roster.forEach(p => {
-                      if (p.injured || p.status === 'out') {
-                          inj.push({
-                              player: { name: p.athlete.displayName, reason: p.status || 'Lesión', photo: p.athlete.headshot?.href },
-                              team: { name: r.team.displayName }
-                          });
-                      }
-                  });
-              }
-          });
-      }
-      setInjuries(inj);
-
-      // Mock stats y pred
+      setInjuries(ad.injuries);
+      setEvents(ad.currentEvents);
       setHomeStats(null);
       setAwayStats(null);
-      setPrediction(null); // Podríamos mapear pickcenter aquí luego
+      setPrediction(null);
 
-      // 3. Local analysis
-      const homeForm       = calculateFormScore(hm, homeId);        // Forma general
+      // ── 3. Motor de análisis (pura matemática, sin llamadas de red) ────────
+      const homeForm       = calculateFormScore(hm, homeId);
       const awayForm       = calculateFormScore(am, awayId);
-      const homeFormAtHome = calculateFormScore(hm, homeId, 'home'); // Solo partidos en casa
-      const awayFormAway   = calculateFormScore(am, awayId, 'away'); // Solo partidos fuera
-      const homeSplit = calculateOverUnder(hm, homeId);
-      const awaySplit = calculateOverUnder(am, awayId);
-      const h2hData   = analyzeH2H(h2h, homeId, awayId);
+      const homeFormAtHome = calculateFormScore(hm, homeId, 'home');
+      const awayFormAway   = calculateFormScore(am, awayId, 'away');
+      const homeSplit      = calculateOverUnder(hm, homeId);
+      const awaySplit      = calculateOverUnder(am, awayId);
+      const h2hData        = analyzeH2H(h2h, homeId, awayId);
+      const homeSlots      = analyzeGoalsByTimeSlot(ad.homeHistEvs, homeId);
+      const awaySlots      = analyzeGoalsByTimeSlot(ad.awayHistEvs, awayId);
 
-      // Build goal timelines using historical events
-      const homeSlots = analyzeGoalsByTimeSlot(homeHistEvs, homeId);
-      const awaySlots = analyzeGoalsByTimeSlot(awayHistEvs, awayId);
-
-      // Poisson mejorado: usa avg en CASA del local vs avg FUERA del visitante
-      // si hay suficientes datos split (≥3 partidos); si no, cae back al general
-      const hGF = homeFormAtHome.total >= 3
-        ? homeFormAtHome.goalsFor   / homeFormAtHome.total
-        : homeForm.goalsFor   / Math.max(homeForm.total, 1);
-      const hGA = homeFormAtHome.total >= 3
-        ? homeFormAtHome.goalsAgainst / homeFormAtHome.total
-        : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
-      const aGF = awayFormAway.total >= 3
-        ? awayFormAway.goalsFor   / awayFormAway.total
-        : awayForm.goalsFor   / Math.max(awayForm.total, 1);
-      const aGA = awayFormAway.total >= 3
-        ? awayFormAway.goalsAgainst / awayFormAway.total
-        : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
-
+      // Poisson mejorado: usa avg en CASA del local vs avg FUERA del visitante.
+      // Si hay pocos partidos split (< 3), usa la forma general como fallback.
+      const hGF = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsFor   / homeFormAtHome.total : homeForm.goalsFor   / Math.max(homeForm.total, 1);
+      const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
+      const aGF = awayFormAway.total   >= 3 ? awayFormAway.goalsFor     / awayFormAway.total   : awayForm.goalsFor   / Math.max(awayForm.total, 1);
+      const aGA = awayFormAway.total   >= 3 ? awayFormAway.goalsAgainst / awayFormAway.total   : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
       const poisson = calcMatchProbabilities(hGF, hGA, aGF, aGA);
 
-      const isLive = summary.header?.competitions?.[0]?.status?.type?.state === 'in';
-      const liveClock = summary.header?.competitions?.[0]?.status?.displayClock || "0'";
+      const isLive       = summary.header?.competitions?.[0]?.status?.type?.state === 'in';
+      const liveClock    = summary.header?.competitions?.[0]?.status?.displayClock || "0'";
       const liveHomeGoals = parseInt(homeComp?.score ?? 0);
       const liveAwayGoals = parseInt(awayComp?.score ?? 0);
 
-      // Fetch official prediction y Cuotas de Mercado (Value Bets)
-      let officialPred = null;
-      let marketOdds = null;
-      try {
-        const pcData = summary.pickcenter;
-        if (pcData && Array.isArray(pcData) && pcData.length > 0) {
-          const item = pcData[0];
-          officialPred = {
-            predictions: {
-              percent: {
-                home: item.homeTeamOdds?.winPercentage ? `${Math.round(item.homeTeamOdds.winPercentage)}%` : null,
-                draw: item.drawOdds?.winPercentage ? `${Math.round(item.drawOdds.winPercentage)}%` : null,
-                away: item.awayTeamOdds?.winPercentage ? `${Math.round(item.awayTeamOdds.winPercentage)}%` : null,
-              },
-              winner: { comment: item.provider?.name || '' },
-            }
-          };
-
-          const getDec = (o) => {
-            if (!o) return null;
-            const val = parseFloat(o.value || o.moneyLine || 0);
-            if (val > 0) return (val / 100) + 1;
-            if (val < 0) return (100 / Math.abs(val)) + 1;
-            return null;
-          };
-          marketOdds = { home: getDec(item.homeTeamOdds), away: getDec(item.awayTeamOdds), draw: getDec(item.drawOdds) };
-        }
-      } catch (_) { /* sin predicción oficial */ }
-
-      // Extraer Posiciones en la tabla (Motivación)
-      let matchStandings = null;
-      try {
-        const st = summary.standings?.groups?.[0]?.standings?.entries;
-        if (st && st.length > 0) {
-          const homeSt = st.find(s => String(s.team?.id) === String(homeId));
-          const awaySt = st.find(s => String(s.team?.id) === String(awayId));
-          if (homeSt && awaySt) {
-            matchStandings = { 
-              homeRank: homeSt.stats?.find(s=>s.name==='rank')?.value || homeSt.stats?.find(s=>s.name==='rankChange')?.value, 
-              awayRank: awaySt.stats?.find(s=>s.name==='rank')?.value || awaySt.stats?.find(s=>s.name==='rankChange')?.value, 
-              total: st.length 
-            };
-          }
-        }
-      } catch(_) {}
-
-      // Extraer Estadísticas Avanzadas (xG, Posesión)
-      let advancedStats = null;
-      try {
-        const box = summary.boxscore?.teams;
-        if (box && box.length === 2) {
-          const getStat = (t, name) => parseFloat(t.statistics?.find(s=>s.name === name)?.displayValue || 0);
-          const homeBox = box.find(t => String(t.team?.id) === String(homeId));
-          const awayBox = box.find(t => String(t.team?.id) === String(awayId));
-          if (homeBox && awayBox) {
-            advancedStats = {
-              home: { xG: getStat(homeBox, 'expectedGoals'), possession: getStat(homeBox, 'possessionPct') },
-              away: { xG: getStat(awayBox, 'expectedGoals'), possession: getStat(awayBox, 'possessionPct') }
-            };
-          }
-        }
-      } catch(_) {}
-
-      // Calcular días de descanso desde el último partido
       const calcRest = (matches) => {
-        if (!matches || matches.length === 0) return null;
+        if (!matches?.length) return null;
         const lastDate = matches[0]?.fixture?.date;
         if (!lastDate) return null;
-        const diff = Math.floor((Date.now() - new Date(lastDate).getTime()) / (1000 * 60 * 60 * 24));
-        return diff;
+        return Math.floor((Date.now() - new Date(lastDate).getTime()) / 86_400_000);
       };
-      const homeRestDays = calcRest(hm);
-      const awayRestDays = calcRest(am);
 
-      const picksRes = generatePicks({ 
-        homeStats: null, awayStats: null, 
-        h2hData, homeForm, awayForm, 
+      const picksRes = generatePicks({
+        homeStats: null, awayStats: null,
+        h2hData, homeForm, awayForm,
         homeSplitStats: homeSplit, awaySplitStats: awaySplit,
         isLive, liveClock, liveHomeGoals, liveAwayGoals,
-        officialPrediction: officialPred,
-        homeCornersData: homeCornersAnalysis,
-        awayCornersData: awayCornersAnalysis,
-        homeCardsData: homeCardsAnalysis,
-        awayCardsData: awayCardsAnalysis,
-        homeSlots,
-        awaySlots,
-        homeFormAtHome,
-        awayFormAway,
+        marketInsight:   ad.marketInsight,
+        homeCornersData: ad.homeCornersData,
+        awayCornersData: ad.awayCornersData,
+        homeCardsData:   ad.homeCardsData,
+        awayCardsData:   ad.awayCardsData,
+        homeSlots, awaySlots,
+        homeFormAtHome, awayFormAway,
         poissonProbs: poisson,
-        injuries: inj,
-        homeTeamName: fix.teams.home.name,
-        homeRestDays,
-        awayRestDays,
-        marketOdds,
-        matchStandings,
-        advancedStats,
+        injuries:       ad.injuries,
+        homeTeamName:   fix.teams.home.name,
+        awayTeamName:   fix.teams.away.name,
+        leagueName:     fix.league.name,
+        homeRestDays:   calcRest(hm),
+        awayRestDays:   calcRest(am),
+        homeHistory:    hm,
+        awayHistory:    am,
+        city:           fix.city,
+        marketOdds:     ad.marketOdds,
+        matchStandings: ad.matchStandings,
+        advancedStats:  ad.advancedStats,
       });
 
-      setAnalysis({ homeForm, awayForm, homeFormAtHome, awayFormAway, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCardsAnalysis, awayCardsAnalysis, homeCornersAnalysis, awayCornersAnalysis });
+      const analysisObj = {
+        homeForm, awayForm, homeFormAtHome, awayFormAway,
+        homeSplit, awaySplit, h2hData, poisson,
+        homeSlots, awaySlots,
+        homeCardsAnalysis:   ad.homeCardsData,
+        awayCardsAnalysis:   ad.awayCardsData,
+        homeCornersAnalysis: ad.homeCornersData,
+        awayCornersAnalysis: ad.awayCornersData,
+        marketInsight: ad.marketInsight,
+      };
+      setAnalysis(analysisObj);
       setPicksResult(picksRes);
+
+      // ── Capa 2: Guardar en sessionStorage para visitas siguientes ──────────
+      try {
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+          ts: Date.now(),
+          fixture: fix,
+          homeMatches: hm, awayMatches: am, h2hMatches: h2h,
+          injuries: ad.injuries,
+          events: ad.currentEvents,
+          analysis: analysisObj,
+          picksResult: picksRes,
+          isLiveMatch: isLive,
+          elapsedSec: parsed.elapsedSec,
+        }));
+      } catch (_) { /* quota exceeded → ignorar */ }
+
     } catch (e) {
       console.error(e);
       setError(e.message || 'Error al cargar el análisis.');
     } finally {
       setLoading(false);
+      setLoadingAnalysis(false);
     }
   }, [fixtureId]);
 
@@ -649,23 +464,13 @@ export default function Analysis() {
 
 
   if (loading) return (
-    <div className="max-w-screen-2xl mx-auto px-6 py-12">
-      <Loader text="Recolectando datos del partido…" />
-      <div className="mt-6 glass-card p-4 space-y-2">
-        {['Forma reciente (12 partidos)', 'H2H histórico', 'Estadísticas de liga', 'Lesiones y convocatorias', 'Probabilidades Poisson'].map(s => (
-          <div key={s} className="flex items-center gap-2 text-xs text-slate-500 animate-pulse">
-            <div className="w-3 h-3 rounded-full border border-slate-700 flex items-center justify-center">
-              <div className="w-1.5 h-1.5 rounded-full bg-accent-green animate-ping" />
-            </div>
-            {s}
-          </div>
-        ))}
-      </div>
+    <div className="w-full py-12">
+      <Loader text="Obteniendo datos del partido…" />
     </div>
   );
 
   if (error) return (
-    <div className="max-w-screen-2xl mx-auto px-6 py-12 text-center">
+    <div className="w-full py-12 text-center">
       <AlertCircle size={40} className="text-accent-red mx-auto mb-3" />
       <p className="text-accent-red font-semibold mb-4">{error}</p>
       <div className="flex gap-3 justify-center">
@@ -677,7 +482,7 @@ export default function Analysis() {
     </div>
   );
 
-  const { homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCards, awayCards } = analysis || {};
+  const { homeForm, awayForm, homeSplit, awaySplit, h2hData, poisson, homeSlots, awaySlots, homeCards, awayCards, marketInsight } = analysis || {};
   const homeId = fixture?.teams?.home?.id;
   const awayId = fixture?.teams?.away?.id;
   const kickoff = fixture?.fixture?.date
@@ -685,7 +490,7 @@ export default function Analysis() {
     : '';
 
   return (
-    <div className="max-w-screen-2xl mx-auto px-6 py-6 space-y-4 animate-fade-in">
+    <div className="w-full space-y-4 animate-fade-in">
 
       {/* Back + header */}
       <div className="flex items-center gap-3">
@@ -696,6 +501,12 @@ export default function Analysis() {
           <p className="section-title">Análisis Tipster</p>
           <div className="flex items-center gap-2">
             <p className="text-xs text-slate-500 mt-0.5">{fixture?.league?.name} · {kickoff}</p>
+            {loadingAnalysis && (
+              <span className="flex items-center gap-1 text-[10px] text-accent-green/70 font-semibold animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-ping" />
+                Calculando…
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -722,18 +533,18 @@ export default function Analysis() {
             {(fixture?.fixture?.status?.short !== 'NS' || fixture?.goals?.home > 0 || fixture?.goals?.away > 0) ? (
               <div className="flex flex-col items-center animate-in fade-in zoom-in duration-500">
                 <div className="flex items-center gap-4">
-                  <div className="text-5xl font-black text-white font-mono bg-surface-900/80 px-6 py-4 rounded-2xl border-2 border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center justify-center min-w-[140px] tracking-tighter gap-3">
+                  <div className="text-5xl font-numbers text-white bg-surface-900/80 px-6 py-4 rounded-2xl border border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.4)] flex items-center justify-center min-w-[140px] tracking-tighter gap-3">
                     {fixture.redCards?.home > 0 && (
                       <div className="flex flex-col items-center gap-1">
-                        <div className="w-[11px] h-[16px] bg-red-600 rounded-[2px] shadow-[0_0_10px_rgba(220,38,38,0.7)]"
+                        <div className="w-[11px] h-[16px] bg-red-600 rounded-[2px] shadow-[0_0_15px_rgba(220,38,38,0.5)]"
                           style={isLiveMatch ? { animation: 'pulse 1.5s infinite' } : {}} />
                         {fixture.redCards.home > 1 && (
-                          <span className="text-[10px] font-black text-red-400 leading-none">{fixture.redCards.home}</span>
+                          <span className="text-[10px] font-bold text-red-400 leading-none">{fixture.redCards.home}</span>
                         )}
                       </div>
                     )}
                     <span className="text-accent-green">{fixture.goals?.home ?? 0}</span>
-                    <span className="text-slate-700 opacity-50">-</span>
+                    <span className="text-slate-800 opacity-50 font-light">-</span>
                     <span className="text-accent-green">{fixture.goals?.away ?? 0}</span>
                     {fixture.redCards?.away > 0 && (
                       <div className="flex flex-col items-center gap-1">
@@ -774,14 +585,14 @@ export default function Analysis() {
                     return (
                       // ── EN VIVO con reloj en tiempo real ──
                       <div className="mt-3 flex flex-col items-center gap-1.5">
-                        <div className="px-4 py-1.5 rounded-full bg-accent-red/10 border border-accent-red/40 flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-accent-red animate-pulse"></span>
-                          <span className="font-mono text-accent-red font-black text-base tracking-widest">
+                        <div className="px-4 py-1.5 rounded-full bg-accent-red/10 border border-accent-red/20 flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-accent-red animate-pulse"></span>
+                          <span className="font-numbers text-accent-red font-bold text-base tracking-widest">
                             {String(dispMin).padStart(2,'0')}:{String(dispSec).padStart(2,'0')}
                           </span>
-                          <span className="text-[9px] font-bold text-accent-red/60 uppercase tracking-widest">{halfLabel}</span>
+                          <span className="text-[9px] font-bold text-accent-red/50 uppercase tracking-[0.2em]">{halfLabel}</span>
                         </div>
-                        <span className="text-[9px] text-accent-red/50 font-bold uppercase tracking-[0.2em]">En Vivo</span>
+                        <span className="text-[9px] text-accent-red/40 font-bold uppercase tracking-[0.2em]">En Vivo</span>
                       </div>
                     );
                   }
@@ -804,13 +615,42 @@ export default function Analysis() {
               <>
                 <div className="text-3xl font-black text-slate-700 font-mono tracking-widest opacity-40">VS</div>
                 {poisson && (
-                  <div className="flex gap-4 bg-white/5 p-4 rounded-xl border border-white/5 shadow-inner">
-                    <ProbCircle prob={poisson.home} label="Local" color="#00ff88" />
-                    <ProbCircle prob={poisson.draw} label="Empate" color="#ffd700" />
-                    <ProbCircle prob={poisson.away} label="Visit." color="#ff4757" />
+                  <div className="flex flex-col items-center">
+                    <div className="flex gap-4 bg-white/5 p-4 rounded-xl border border-white/5 shadow-inner">
+                      <ProbCircle prob={poisson.home} label="Local" color="#00ff88" />
+                      <ProbCircle prob={poisson.draw} label="Empate" color="#ffd700" />
+                      <ProbCircle prob={poisson.away} label="Visit." color="#ff4757" />
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Modelo Poisson</p>
                   </div>
                 )}
-                <p className="text-sm text-slate-500 font-bold uppercase tracking-widest mt-1">Modelo Poisson</p>
+                {marketInsight?.predictions?.percent?.home && (
+                  <div className="mt-4 w-full bg-surface-900/50 p-3 rounded-xl border border-blue-500/20">
+                    <div className="flex items-center gap-1.5 mb-2 justify-center">
+                      <Zap size={12} className="text-blue-400" />
+                      <p className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">Predicción Oficial ESPN</p>
+                    </div>
+                    <div className="flex w-full h-2 rounded-full overflow-hidden bg-black/50 mb-2">
+                      <div className="h-full bg-accent-green" style={{ width: `${marketInsight.predictions.percent.home}%` }}></div>
+                      <div className="h-full bg-yellow-500" style={{ width: `${marketInsight.predictions.percent.draw}%` }}></div>
+                      <div className="h-full bg-accent-red" style={{ width: `${marketInsight.predictions.percent.away}%` }}></div>
+                    </div>
+                    <div className="flex justify-between w-full px-1">
+                      <div className="flex flex-col items-start">
+                        <span className="text-[11px] font-numbers font-bold text-accent-green">{marketInsight.predictions.percent.home}%</span>
+                        <span className="text-[9px] text-slate-500 font-numbers">{(100 / marketInsight.predictions.percent.home).toFixed(2)}</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[11px] font-numbers font-bold text-yellow-500">{marketInsight.predictions.percent.draw}%</span>
+                        <span className="text-[9px] text-slate-500 font-numbers">{(100 / marketInsight.predictions.percent.draw).toFixed(2)}</span>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <span className="text-[11px] font-numbers font-bold text-accent-red">{marketInsight.predictions.percent.away}%</span>
+                        <span className="text-[9px] text-slate-500 font-numbers">{(100 / marketInsight.predictions.percent.away).toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -845,6 +685,135 @@ export default function Analysis() {
           </div>
         )}
       </SECTION>
+
+      {/* ── ESTADÍSTICAS FINALES DEL PARTIDO ── */}
+      {matchStats && fixture?.fixture?.status?.short !== 'NS' && fixture?.fixture?.status?.short !== 'LIVE' && fixture?.fixture?.status?.short !== 'HT' && (
+        <section className="glass-card p-5 animate-slide-up" style={{ background: 'linear-gradient(135deg, rgba(13,21,32,0.98), rgba(16,28,46,0.95))' }}>
+          <div className="flex items-center gap-2 mb-5">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.2)' }}>
+              <TrendingUp size={14} className="text-accent-green" />
+            </div>
+            <h2 className="text-sm font-bold text-white">📊 Estadísticas del Partido</h2>
+            <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-accent-green/10 text-accent-green border border-accent-green/20">RESULTADO FINAL</span>
+          </div>
+
+          {/* Scoreline context */}
+          <div className="flex items-center justify-center gap-6 mb-5">
+            <span className="text-sm font-bold text-slate-300">{fixture.teams.home.name}</span>
+            <span className="text-2xl font-black font-mono text-white bg-surface-900/80 px-5 py-2 rounded-xl border border-white/10">
+              {fixture.goals.home} – {fixture.goals.away}
+            </span>
+            <span className="text-sm font-bold text-slate-300">{fixture.teams.away.name}</span>
+          </div>
+
+          {/* Stats grid */}
+          <div className="space-y-3">
+            {[
+              {
+                label: 'Posesión', icon: '⚽',
+                home: matchStats.possession.home ? `${matchStats.possession.home}%` : null,
+                away: matchStats.possession.away ? `${matchStats.possession.away}%` : null,
+                homePct: matchStats.possession.home ? parseFloat(matchStats.possession.home) : 50,
+                awayPct: matchStats.possession.away ? parseFloat(matchStats.possession.away) : 50,
+                isPercentage: true,
+              },
+              {
+                label: 'Tiros Totales', icon: '🎯',
+                home: matchStats.shots.home,
+                away: matchStats.shots.away,
+                homePct: matchStats.shots.home && matchStats.shots.away ? (parseFloat(matchStats.shots.home) / (parseFloat(matchStats.shots.home) + parseFloat(matchStats.shots.away))) * 100 : 50,
+                awayPct: matchStats.shots.home && matchStats.shots.away ? (parseFloat(matchStats.shots.away) / (parseFloat(matchStats.shots.home) + parseFloat(matchStats.shots.away))) * 100 : 50,
+              },
+              {
+                label: 'A Puerta', icon: '🥅',
+                home: matchStats.shotsOnTarget.home,
+                away: matchStats.shotsOnTarget.away,
+                homePct: matchStats.shotsOnTarget.home && matchStats.shotsOnTarget.away ? (parseFloat(matchStats.shotsOnTarget.home) / (parseFloat(matchStats.shotsOnTarget.home) + parseFloat(matchStats.shotsOnTarget.away))) * 100 : 50,
+                awayPct: matchStats.shotsOnTarget.home && matchStats.shotsOnTarget.away ? (parseFloat(matchStats.shotsOnTarget.away) / (parseFloat(matchStats.shotsOnTarget.home) + parseFloat(matchStats.shotsOnTarget.away))) * 100 : 50,
+              },
+              {
+                label: 'Córners', icon: '🚩',
+                home: matchStats.corners.home,
+                away: matchStats.corners.away,
+                homePct: matchStats.corners.home && matchStats.corners.away ? (parseFloat(matchStats.corners.home) / (parseFloat(matchStats.corners.home) + parseFloat(matchStats.corners.away))) * 100 : 50,
+                awayPct: matchStats.corners.home && matchStats.corners.away ? (parseFloat(matchStats.corners.away) / (parseFloat(matchStats.corners.home) + parseFloat(matchStats.corners.away))) * 100 : 50,
+              },
+              {
+                label: 'Faltas', icon: '🟡',
+                home: matchStats.fouls.home,
+                away: matchStats.fouls.away,
+                homePct: matchStats.fouls.home && matchStats.fouls.away ? (parseFloat(matchStats.fouls.home) / (parseFloat(matchStats.fouls.home) + parseFloat(matchStats.fouls.away))) * 100 : 50,
+                awayPct: matchStats.fouls.home && matchStats.fouls.away ? (parseFloat(matchStats.fouls.away) / (parseFloat(matchStats.fouls.home) + parseFloat(matchStats.fouls.away))) * 100 : 50,
+              },
+            ].filter(row => row.home !== null && row.away !== null).map(({ label, icon, home, away, homePct, awayPct }) => (
+              <div key={label}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[13px] font-bold text-white font-numbers min-w-[3rem] text-right"
+                    style={{ color: homePct >= awayPct ? '#00ff88' : 'rgba(255,255,255,0.7)' }}>
+                    {home}
+                  </span>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-[0.15em] font-bold mx-3 w-32 text-center flex items-center justify-center gap-1.5 opacity-60">
+                    {icon} {label}
+                  </span>
+                  <span className="text-[13px] font-bold font-numbers min-w-[3rem] text-left"
+                    style={{ color: awayPct > homePct ? '#ff4757' : 'rgba(255,255,255,0.7)' }}>
+                    {away}
+                  </span>
+                </div>
+                <div className="flex h-2 rounded-full overflow-hidden bg-white/5">
+                  <div
+                    className="h-full transition-all duration-700 rounded-l-full"
+                    style={{ width: `${homePct}%`, background: 'linear-gradient(90deg, #00ff88, #00d97e)' }}
+                  />
+                  <div
+                    className="h-full transition-all duration-700 rounded-r-full"
+                    style={{ width: `${awayPct}%`, background: 'linear-gradient(90deg, #ff6b7a, #ff4757)' }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Cards & Offsides row */}
+          {(matchStats.yellowCards.home !== null || matchStats.redCards.home !== null || matchStats.offsides.home !== null) && (
+            <div className="flex gap-3 mt-5 pt-4 border-t border-white/5">
+              {matchStats.yellowCards.home !== null && (
+                <div className="flex-1 bg-surface-900/60 rounded-lg p-3 text-center border border-yellow-500/10">
+                  <div className="flex justify-center items-center gap-2 mb-1">
+                    <div className="w-3 h-4 bg-yellow-400 rounded-[2px]" />
+                    <span className="text-xs font-black text-white">{matchStats.yellowCards.home}</span>
+                    <span className="text-xs text-slate-600">–</span>
+                    <span className="text-xs font-black text-white">{matchStats.yellowCards.away}</span>
+                  </div>
+                  <p className="text-[9px] text-yellow-500/60 uppercase tracking-widest">Amarillas</p>
+                </div>
+              )}
+              {matchStats.redCards.home !== null && (
+                <div className="flex-1 bg-surface-900/60 rounded-lg p-3 text-center border border-red-500/10">
+                  <div className="flex justify-center items-center gap-2 mb-1">
+                    <div className="w-3 h-4 bg-red-600 rounded-[2px]" />
+                    <span className="text-xs font-black text-white">{matchStats.redCards.home}</span>
+                    <span className="text-xs text-slate-600">–</span>
+                    <span className="text-xs font-black text-white">{matchStats.redCards.away}</span>
+                  </div>
+                  <p className="text-[9px] text-red-500/60 uppercase tracking-widest">Rojas</p>
+                </div>
+              )}
+              {matchStats.offsides.home !== null && (
+                <div className="flex-1 bg-surface-900/60 rounded-lg p-3 text-center border border-white/5">
+                  <div className="flex justify-center items-center gap-2 mb-1">
+                    <span className="text-xs">🚩</span>
+                    <span className="text-xs font-black text-white">{matchStats.offsides.home}</span>
+                    <span className="text-xs text-slate-600">–</span>
+                    <span className="text-xs font-black text-white">{matchStats.offsides.away}</span>
+                  </div>
+                  <p className="text-[9px] text-slate-500 uppercase tracking-widest">Fueras de Juego</p>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
 
 
@@ -989,7 +958,7 @@ export default function Analysis() {
                   </div>
 
                   {/* Probability lines — Yellow */}
-                  <div className="bg-surface-900 rounded-xl p-3 space-y-2">
+                  <div className="bg-surface-800 rounded-xl p-3 space-y-2">
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-2">
                       🟨 Líneas de Amarillas ({cards.matches} partidos)
                     </p>
@@ -1009,13 +978,13 @@ export default function Analysis() {
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <span className="text-[11px] font-black text-yellow-400 w-8 text-right">{pct}%</span>
+                        <span className="text-[11px] font-black text-yellow-500 w-8 text-right">{pct}%</span>
                       </div>
                     ))}
                   </div>
 
                   {/* Probability lines — Red */}
-                  <div className="bg-surface-900 rounded-xl p-3 space-y-2">
+                  <div className="bg-surface-800 rounded-xl p-3 space-y-2">
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-2">
                       🟥 Líneas de Rojas ({cards.matches} partidos)
                     </p>
@@ -1033,7 +1002,7 @@ export default function Analysis() {
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <span className="text-[11px] font-black text-red-400 w-8 text-right">{pct}%</span>
+                        <span className="text-[11px] font-black text-red-500 w-8 text-right">{pct}%</span>
                       </div>
                     ))}
                     <p className="text-[9px] text-slate-600 text-center mt-1">
@@ -1071,19 +1040,19 @@ export default function Analysis() {
                     </div>
                   </div>
                   
-                  <div className="bg-surface-900 rounded-lg p-3">
+                  <div className="bg-surface-800 rounded-lg p-3">
                     <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Córners (Basado en {corners.matches} partidos)</p>
                     <div className="grid grid-cols-3 gap-2">
                        <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-accent-green">{Math.round((corners.over3/corners.matches)*100)}%</p>
+                          <p className="text-sm font-black text-green-500">{Math.round((corners.over3/corners.matches)*100)}%</p>
                           <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 3</p>
                        </div>
                        <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-amber-400">{Math.round((corners.over4/corners.matches)*100)}%</p>
+                          <p className="text-sm font-black text-amber-500">{Math.round((corners.over4/corners.matches)*100)}%</p>
                           <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 4</p>
                        </div>
                        <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-accent-red">{Math.round((corners.over5/corners.matches)*100)}%</p>
+                          <p className="text-sm font-black text-red-500">{Math.round((corners.over5/corners.matches)*100)}%</p>
                           <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 5</p>
                        </div>
                     </div>
@@ -1122,9 +1091,9 @@ export default function Analysis() {
         </SECTION>
       )}
 
-      {/* ── PREDICCIÓN OFICIAL API ── */}
+      {/* ── PREDICCIÓN EXTERNA ── */}
       {prediction && (
-        <SECTION icon={Target} title="Predicción Oficial API-Football" id="prediction">
+        <SECTION icon={Target} title="Predicción Externa" id="prediction">
           <div className="grid grid-cols-3 gap-3 mb-4">
             <div className="text-center rounded-lg p-3" style={{ background: 'rgba(0,255,136,0.07)', border: '1px solid rgba(0,255,136,0.15)' }}>
               <p className="text-xl font-bold text-accent-green font-mono">

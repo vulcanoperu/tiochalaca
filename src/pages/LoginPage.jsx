@@ -133,6 +133,49 @@ export default function LoginPage({ onLogin }) {
     };
   }, [onLogin]);
 
+  // ── PRE-CALENTAMIENTO (Background Prefetch) ──────────────────────────
+  // Mientras el usuario piensa o teclea su contraseña, descargamos silenciosamente
+  // todo lo necesario para que el Home sea instantáneo al entrar.
+  useEffect(() => {
+    const prefetchHome = async () => {
+      try {
+        const BACKEND = import.meta.env.VITE_BACKEND_URL || '';
+        // 1. Calcular fecha local hoy
+        const todayStr = new Date().toLocaleDateString('en-CA');
+        
+        // 2. Fetch partidos del día
+        const res = await fetch(`${BACKEND}/api/fixtures/date/${todayStr}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const matches = json.data || [];
+        
+        // 3. Guardar en caché de sesión para el Home.jsx
+        sessionStorage.setItem(`chalaca_home_${todayStr}`, JSON.stringify(matches));
+
+        // 4. Pre-cargar imágenes (logos de los primeros 15 partidos)
+        matches.slice(0, 15).forEach(m => {
+          if (m.teams?.home?.logo) new Image().src = m.teams.home.logo;
+          if (m.teams?.away?.logo) new Image().src = m.teams.away.logo;
+          if (m.league?.logo) new Image().src = m.league.logo;
+        });
+
+        // 5. Pre-cargar el análisis pesado de los 3 primeros partidos
+        matches.slice(0, 3).forEach(m => {
+          const id = m.fixture?.id;
+          if (id) fetch(`${BACKEND}/api/espn/match/${id}/analysis`).catch(() => {});
+        });
+
+      } catch (e) {
+        // Fallo silencioso, es solo optimización
+      }
+    };
+    
+    // Iniciar prefetch 500ms después de montar el Login para no afectar 
+    // la animación de entrada inicial.
+    const timer = setTimeout(prefetchHome, 500);
+    return () => clearTimeout(timer);
+  }, []);
+
   const shake = () => { setShaking(true); setTimeout(() => setShaking(false), 500); };
 
   const handleSubmit = async (e) => {

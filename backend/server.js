@@ -5,14 +5,14 @@ if (typeof File === 'undefined') { global.File = require('buffer').File; }
  * =====================================================================
  * CHALACA — Backend Scraper & Cache Server
  * =====================================================================
- * Arquitectura Optimizada:
- *   1. API-Sports             → Partidos, Forma y H2H (Usando caché local)
- *   2. Axios + Cheerio        → Understat (xG), Transfermarkt (Lesiones)
- *   3. Caché en memoria (TTL) → Protege las API keys rotativas
+ * Arquitectura (100% gratuita, sin API keys):
+ *   1. ESPN API interna     → Partidos, Forma, H2H, Cuotas (pickcenter)
+ *   2. Axios + Cheerio      → Understat (xG), Transfermarkt (Lesiones)
+ *   3. Caché en memoria TTL → Minimiza llamadas externas
  * =====================================================================
  */
 
-require('dotenv').config();
+require('dotenv').config({ path: __dirname + '/.env' });
 const express  = require('express');
 const cors     = require('cors');
 const axios    = require('axios');
@@ -54,49 +54,14 @@ const http = axios.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// API-SPORTS CLIENT (CON ROTACIÓN DE LLAVES)
-// ─────────────────────────────────────────────────────────────────────
-const apiSports = axios.create({
-  baseURL : 'https://v3.football.api-sports.io',
-  timeout : 15_000,
-});
 
-let currentKeyIndex = 0;
-const bannedKeys = new Set();
-
-apiSports.interceptors.request.use((config) => {
-  const keyString = process.env.FOOTBALL_API_KEY || '';
-  if (keyString) {
-    let keys = keyString.split(',').map(k => k.trim()).filter(Boolean);
-    // Filtrar llaves baneadas temporalmente
-    const activeKeys = keys.filter(k => !bannedKeys.has(k));
-    if (activeKeys.length === 0) activeKeys.push(...keys); // Fallback si todas están baneadas
-    
-    if (activeKeys.length > 0) {
-      const finalKey = activeKeys[currentKeyIndex % activeKeys.length];
-      currentKeyIndex++;
-      config.headers['x-apisports-key'] = finalKey;
-    }
-  }
-  return config;
-});
-
-apiSports.interceptors.response.use(response => {
-  if (response.data && response.data.errors && (response.data.errors.requests || response.data.errors.access)) {
-    // Si la llave actual alcanzó el límite o está suspendida, la baneamos
-    const usedKey = response.config.headers['x-apisports-key'];
-    if (usedKey) bannedKeys.add(usedKey);
-  }
-  return response;
-});
 
 // ════════════════════════════════════════════════════════════════════
 //  ENDPOINTS
 // ════════════════════════════════════════════════════════════════════
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString(), cacheSize: cache.size, apiConfigured: !!process.env.FOOTBALL_API_KEY });
+  res.json({ status: 'ok', time: new Date().toISOString(), cacheSize: cache.size, source: 'ESPN (free)' });
 });
 
 app.delete('/api/cache', (req, res) => {
@@ -104,17 +69,86 @@ app.delete('/api/cache', (req, res) => {
   res.json({ message: 'Caché limpiada correctamente' });
 });
 
-const { getTodayFixtures, getLiveFixtures, ALLOWED_LEAGUES } = require('./espnAdapter');
+const { 
+  getTodayFixtures, 
+  getLiveFixtures, 
+  getMatchSummary, 
+  getEnrichedSummary, 
+  getTeamSchedule, 
+  ALLOWED_LEAGUES,
+  axiosInstance 
+} = require('./espnAdapter');
+
+// ─────────────────────────────────────────────────────────────────────
+// SUMMARY ENRIQUECIDO — Stats normalizadas para el motor de análisis
+// Cubre todas las ligas: retorna null en campos sin datos (SAM) para
+// que el motor use Poisson puro como fallback automático.
+// ─────────────────────────────────────────────────────────────────────
+app.get('/api/espn/enriched/:eventId', async (req, res) => {
+  try {
+    const data = await getEnrichedSummary(req.params.eventId);
+    if (!data) return res.status(404).json({ error: 'Not found' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────
 // 1. PARTIDOS DEL DÍA — ESPN (Caché 10 mins)
 // ─────────────────────────────────────────────────────────────────────
 app.get('/api/fixtures/today', async (req, res) => {
   try {
-    const fixtures = await getTodayFixtures();
+    const { date } = req.query;
+    let fixtures;
+    if (date) {
+      // Reutilizamos la lógica de getTodayFixtures pero pasando la fecha
+      const requestsWithSlug = Object.keys(ALLOWED_LEAGUES).map(l => 
+        axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${date.replace(/-/g, '')}`)
+          .then(res => ({ slug: l, data: res.data }))
+          .catch(() => null)
+      );
+    
+      const resultsWithSlug = await Promise.all(requestsWithSlug);
+      fixtures = [];
+    
+      for (const r of resultsWithSlug) {
+        if (!r || !r.data.events) continue;
+        const { slug, data } = r;
+        const mapped = data.events.map(e => {
+          const fixture = mapESPNToApiSports(e);
+          fixture.league.id = slug;
+          fixture.league.name = ALLOWED_LEAGUES[slug];
+          return fixture;
+        });
+        fixtures.push(...mapped);
+      }
+    } else {
+      fixtures = await getTodayFixtures();
+    }
     return res.json({ source: 'espn', fromCache: false, data: fixtures });
   } catch (err) {
     return res.status(500).json({ error: 'Error obteniendo partidos', details: err.message });
+  }
+});
+
+app.get('/api/espn/summary/:eventId', async (req, res) => {
+  try {
+    const data = await getMatchSummary(req.params.eventId);
+    if (!data) return res.status(404).json({ error: 'Not found' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/espn/team/:teamId/schedule', async (req, res) => {
+  try {
+    const leagueSlug = req.query.league || 'all';
+    const events = await getTeamSchedule(leagueSlug, req.params.teamId);
+    res.json({ events });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -139,15 +173,21 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const isPast   = date < todayStr;
-  const ttl      = isPast ? 60 : 1; // días pasados: 60 min / hoy y futuro: 1 min
+  // TTL mejorado:
+  // - Días pasados: 4h (los resultados no cambian)
+  // - Hoy/futuro sin live: 5 min (redujo re-fetches de cada 1 min a cada 5 min)
+  // - Hoy con partidos en vivo: 2 min (más fresco, pero sin bombardear ESPN)
+  const ttlBase  = isPast ? 240 : 5;
 
   const cacheKey = `espn_date_${date}`;
   const cached   = cacheGet(cacheKey);
   if (cached) return res.json({ source: 'espn', fromCache: true, data: cached });
 
   try {
+    // Timeout de 3s por liga: si ESPN tarda más, descartamos esa liga pero
+    // respondemos con las demás (no bloqueamos toda la respuesta)
     const requestsWithSlug = Object.keys(ALLOWED_LEAGUES).map(l =>
-      axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`)
+      axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 5000 })
         .then(res => ({ slug: l, data: res.data }))
     );
     const resultsWithSlug = await Promise.allSettled(requestsWithSlug);
@@ -197,8 +237,8 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
       });
     }
 
-    // Si hay partidos en vivo, forzar caché a 1 minuto sin importar el día
-    const finalTtl = hasLiveMatches ? 1 : ttl;
+    // Si hay partidos en vivo, TTL de 2 min para mantener scores frescos
+    const finalTtl = hasLiveMatches ? 2 : ttlBase;
     cacheSet(cacheKey, allFixtures, finalTtl);
     return res.json({ source: 'espn', fromCache: false, data: allFixtures });
   } catch (err) {
@@ -206,17 +246,267 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// PROXY PARA ESPN (Evitar CORS en Frontend)
-// ─────────────────────────────────────────────────────────────────────
-app.get('/api/espn/summary/:id', async (req, res) => {
+// El endpoint anterior /api/espn/summary/:id ha sido consolidado 
+// con /api/espn/summary/:eventId (linea 101) que ya usa getMatchSummary con caché.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANÁLISIS COMPLETO DE PARTIDO — Un solo endpoint que reemplaza ~24 llamadas
+// del frontend. Mueve el trabajo pesado al servidor donde hay caché en memoria.
+// Para ligas SAM sin boxscore, retorna null en corners/tarjetas (no error)
+// para que el motor de análisis active el fallback Poisson automáticamente.
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
+  const { eventId } = req.params;
+  const cacheKey = `match_analysis_${eventId}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return res.json({ fromCache: true, data: cached });
+
   try {
-    // Añadimos un timestamp (?t=Date.now()) para evitar el caché agresivo (CDN) de ESPN 
-    // que suele causar un desfase de ~1 minuto en los partidos en vivo.
-    const { data } = await axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${req.params.id}&t=${Date.now()}`);
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    // 1. Resumen principal del partido
+    const summary = await getMatchSummary(eventId);
+    if (!summary?.header) return res.status(404).json({ error: 'Partido no encontrado' });
+
+    const comp     = summary.header.competitions[0];
+    const homeComp = comp.competitors.find(c => c.homeAway === 'home');
+    const awayComp = comp.competitors.find(c => c.homeAway === 'away');
+    const homeId   = homeComp.id;
+    const awayId   = awayComp.id;
+    const leagueSlug = summary.header.league?.slug || 'all';
+
+    // 2. Schedules de ambos equipos en paralelo (igual que el endpoint individual)
+    const filterCompleted = (events) => (events || [])
+      .filter(e => {
+        const state = e.competitions?.[0]?.status?.type?.state;
+        if (state !== 'post') return false;
+        const name = (e.season?.slug || e.name || '').toLowerCase();
+        return !name.includes('friendly') && !name.includes('amistoso');
+      })
+      .filter((v, i, a) => a.findIndex(t => t.id === v.id) === i)
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 15);
+
+    const fetchSchedule = async (teamId) => {
+      const slugs = new Set(leagueSlug !== 'all' ? [leagueSlug] : []);
+      try {
+        const tr = await axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/${teamId}`);
+        const dl = tr.data?.team?.defaultLeague?.slug;
+        if (dl && dl !== 'all') slugs.add(dl);
+      } catch (_) {}
+      if (!slugs.size) slugs.add('all');
+      const results = await Promise.all(Array.from(slugs).map(s =>
+        axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${s}/teams/${teamId}/schedule`)
+          .then(r => r.data?.events || []).catch(() => [])
+      ));
+      return filterCompleted(results.flat());
+    };
+
+    const [homeRaw, awayRaw] = await Promise.all([fetchSchedule(homeId), fetchSchedule(awayId)]);
+
+    // 3. Mapear eventos al formato del motor de análisis
+    const mapEvent = (ev) => {
+      const c     = ev.competitions?.[0];
+      const homeC = c?.competitors?.find(x => x.homeAway === 'home');
+      const awayC = c?.competitors?.find(x => x.homeAway === 'away');
+      const getScore = t => parseInt(t?.score?.value ?? t?.score ?? 0);
+      const getName  = t => t?.team?.displayName || t?.team?.name || t?.team?.shortDisplayName || '?';
+      return {
+        fixture: { id: ev.id, date: ev.date, status: { short: 'FT' } },
+        league:  { name: ev.league?.name || ev.season?.displayName || 'Desconocido' },
+        teams:   { home: { id: homeC?.id, name: getName(homeC), winner: homeC?.winner },
+                   away: { id: awayC?.id, name: getName(awayC), winner: awayC?.winner } },
+        goals:   { home: getScore(homeC), away: getScore(awayC) },
+      };
+    };
+
+    const enrichMatch = (m, teamId) => {
+      const isHome = String(m.teams?.home?.id) === String(teamId);
+      const winner = m.teams?.home?.winner ? 'home' : m.teams?.away?.winner ? 'away' : 'draw';
+      const result = isHome ? (winner === 'home' ? 'W' : winner === 'draw' ? 'D' : 'L')
+                            : (winner === 'away' ? 'W' : winner === 'draw' ? 'D' : 'L');
+      const dateStr = m.fixture?.date
+        ? new Date(m.fixture.date).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: '2-digit' })
+        : '';
+      return { ...m, _isHome: isHome, _opponent: isHome ? m.teams?.away?.name : m.teams?.home?.name,
+               _result: result, _date: dateStr, _league: m.league?.name || '' };
+    };
+
+    const hm = homeRaw.filter(e => String(e.id) !== String(eventId)).map(e => enrichMatch(mapEvent(e), homeId));
+    const am = awayRaw.filter(e => String(e.id) !== String(eventId)).map(e => enrichMatch(mapEvent(e), awayId));
+
+    // 4. Summaries históricos en paralelo (máx 12 por equipo = hasta 24 llamadas)
+    //    El caché de getMatchSummary (24h para partidos terminados) hace esto muy rápido
+    const fetchHistSummaries = async (matches) => {
+      const ids     = matches.slice(0, 12).map(m => m.fixture.id);
+      const results = await Promise.allSettled(ids.map(id => getMatchSummary(id)));
+      return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    };
+
+    const [homeHist, awayHist] = await Promise.all([fetchHistSummaries(hm), fetchHistSummaries(am)]);
+
+    // 5. Extraer eventos (goles/tarjetas) de los summaries históricos
+    const extractEvs = (s) => (s.keyEvents || []).map(e => {
+      const t = e.type?.text || '';
+      return {
+        type:   (t.includes('Goal') || t.includes('Penalty - Scored')) ? 'Goal' : t.includes('Card') ? 'Card' : 'subst',
+        detail: t,
+        time:   { elapsed: e.clock?.value ? Math.floor(e.clock.value / 60) : parseInt(e.clock?.displayValue) || 0 },
+        team:   { id: String(e.team?.id) },
+        player: { name: e.participants?.[0]?.athlete?.displayName },
+      };
+    });
+
+    // 6. Análisis de Corners — retorna null si ESPN no provee boxscore (ej. Liga 1 Perú)
+    //    El motor de análisis omite el mercado de corners automáticamente cuando recibe null.
+    const getTeamCorners = (s, tid) => {
+      const teams = s?.boxscore?.teams || [];
+      if (!teams[0]?.statistics) return null;  // ← Fallback SAM: no hay stats
+      const t    = teams.find(t => String(t.team?.id) === String(tid));
+      const stat = t?.statistics?.find(s => s.name === 'wonCorners')?.displayValue;
+      return stat != null ? parseInt(stat) : null;
+    };
+    const analyzeCorners = (hist, tid) => {
+      const arr = hist.map(s => getTeamCorners(s, tid)).filter(c => c !== null);
+      if (!arr.length) return null; // null = "sin datos" → el motor usa Poisson puro
+      const total = arr.reduce((a, b) => a + b, 0);
+      return { avg: (total / arr.length).toFixed(1), total, max: Math.max(...arr),
+               matches: arr.length, over3: arr.filter(c => c > 3).length,
+               over4: arr.filter(c => c > 4).length, over5: arr.filter(c => c > 5).length };
+    };
+
+    // 7. Análisis de Tarjetas — retorna null si no hay keyEvents (ej. Venezuela)
+    const analyzeCards = (hist, tid) => {
+      const yArr = [], rArr = [];
+      hist.forEach(s => {
+        let y = 0, r = 0;
+        (s.keyEvents || []).forEach(e => {
+          if (e.type?.text?.includes('Card') && String(e.team?.id) === String(tid)) {
+            e.type.text.toLowerCase().includes('red') ? r++ : y++;
+          }
+        });
+        yArr.push(y); rArr.push(r);
+      });
+      if (!yArr.length) return null; // null = "sin datos" → motor omite mercado tarjetas
+      const n = yArr.length;
+      const totalY = yArr.reduce((a, b) => a + b, 0);
+      const totalR = rArr.reduce((a, b) => a + b, 0);
+      const total  = totalY + totalR;
+      const combined = yArr.map((y, i) => y + rArr[i]);
+      return {
+        avg: (total / n).toFixed(1), total, max: Math.max(...combined), matches: n,
+        over1: combined.filter(c => c > 1).length, over2: combined.filter(c => c > 2).length,
+        over3: combined.filter(c => c > 3).length,
+        yellow: totalY, avgYellow: (totalY / n).toFixed(2),
+        over1Y: yArr.filter(c => c > 1).length, over2Y: yArr.filter(c => c > 2).length,
+        over3Y: yArr.filter(c => c > 3).length, maxYellow: Math.max(...yArr),
+        red: totalR, avgRed: (totalR / n).toFixed(2),
+        over0R: rArr.filter(c => c > 0).length, maxRed: Math.max(...rArr),
+      };
+    };
+
+    // 8. H2H desde summary
+    const h2hTeamA  = summary.headToHeadGames?.[0]?.team;
+    const resolve   = o => o?.displayName || o?.name || o?.shortName || o?.abbreviation || '?';
+    const h2h = (summary.headToHeadGames?.[0]?.events || []).map(e => {
+      const hg = parseInt(e.homeTeamScore ?? 0), ag = parseInt(e.awayTeamScore ?? 0);
+      const aId = String(h2hTeamA?.id), bId = String(e.opponent?.id);
+      const isAHome = String(e.homeTeamId) === aId;
+      return {
+        fixture: { date: e.gameDate, status: { short: 'FT' } },
+        teams: {
+          home: { id: isAHome ? aId : bId,   name: isAHome ? resolve(h2hTeamA) : resolve(e.opponent), winner: hg > ag },
+          away: { id: isAHome ? bId : aId,   name: isAHome ? resolve(e.opponent) : resolve(h2hTeamA), winner: ag > hg },
+        },
+        goals: { home: hg, away: ag },
+      };
+    });
+
+    // 9. Lesiones desde rosters
+    const injuries = [];
+    (summary.rosters || []).forEach(r =>
+      (r.roster || []).forEach(p => {
+        if (p.injured || p.status === 'out')
+          injuries.push({ player: { name: p.athlete?.displayName, reason: p.status || 'Lesión',
+                          photo: p.athlete?.headshot?.href }, team: { name: r.team?.displayName } });
+      })
+    );
+
+    // 10. Cuotas de mercado (PickCenter de ESPN)
+    let marketInsight = null, marketOdds = null;
+    try {
+      const pc = summary.pickcenter;
+      if (Array.isArray(pc) && pc.length > 0) {
+        const item = pc[0];
+        const getDec = o => {
+          if (!o) return null;
+          const v = parseFloat(o.value || o.moneyLine || 0);
+          return v > 0 ? (v / 100) + 1 : v < 0 ? (100 / Math.abs(v)) + 1 : null;
+        };
+        marketInsight = {
+          predictions: {
+            percent: {
+              home: item.homeTeamOdds?.winPercentage ? `${Math.round(item.homeTeamOdds.winPercentage)}` : null,
+              draw: item.drawOdds?.winPercentage     ? `${Math.round(item.drawOdds.winPercentage)}`     : null,
+              away: item.awayTeamOdds?.winPercentage ? `${Math.round(item.awayTeamOdds.winPercentage)}` : null,
+            },
+            winner: { comment: item.provider?.name || '' },
+          },
+        };
+        marketOdds = { home: getDec(item.homeTeamOdds), away: getDec(item.awayTeamOdds), draw: getDec(item.drawOdds) };
+      }
+    } catch (_) {}
+
+    // 11. Posiciones en tabla (motivación)
+    let matchStandings = null;
+    try {
+      const st = summary.standings?.groups?.[0]?.standings?.entries;
+      if (st?.length > 0) {
+        const hSt = st.find(s => String(s.team?.id) === String(homeId));
+        const aSt = st.find(s => String(s.team?.id) === String(awayId));
+        if (hSt && aSt) matchStandings = {
+          homeRank: hSt.stats?.find(s => s.name === 'rank')?.value,
+          awayRank: aSt.stats?.find(s => s.name === 'rank')?.value,
+          total: st.length,
+        };
+      }
+    } catch (_) {}
+
+    // 12. Stats avanzadas (xG, posesión) — null para ligas sin boxscore
+    let advancedStats = null;
+    try {
+      const box = summary.boxscore?.teams;
+      if (box?.length === 2) {
+        const getStat = (t, name) => { const v = parseFloat(t.statistics?.find(s => s.name === name)?.displayValue); return isNaN(v) ? null : v; };
+        const hBox = box.find(t => String(t.team?.id) === String(homeId));
+        const aBox = box.find(t => String(t.team?.id) === String(awayId));
+        if (hBox && aBox) advancedStats = {
+          home: { xG: getStat(hBox, 'expectedGoals'), possession: getStat(hBox, 'possessionPct') },
+          away: { xG: getStat(aBox, 'expectedGoals'), possession: getStat(aBox, 'possessionPct') },
+        };
+      }
+    } catch (_) {}
+
+    const result = {
+      homeMatches:    hm,
+      awayMatches:    am,
+      h2h,
+      currentEvents:  extractEvs(summary),
+      homeHistEvs:    homeHist.flatMap(s => extractEvs(s)),
+      awayHistEvs:    awayHist.flatMap(s => extractEvs(s)),
+      homeCornersData: analyzeCorners(homeHist, homeId),
+      awayCornersData: analyzeCorners(awayHist, awayId),
+      homeCardsData:   analyzeCards(homeHist, homeId),
+      awayCardsData:   analyzeCards(awayHist, awayId),
+      injuries, marketInsight, marketOdds, matchStandings, advancedStats,
+    };
+
+    // Caché: 4h para partidos terminados, 5 min para live/upcoming
+    const matchState = summary.header?.competitions?.[0]?.status?.type?.state;
+    cacheSet(cacheKey, result, matchState === 'post' ? 240 : 5);
+    return res.json({ fromCache: false, data: result });
+
+  } catch (err) {
+    console.error('[match/analysis]', err.message);
+    return res.status(500).json({ error: 'Error al procesar análisis del partido', details: err.message });
   }
 });
 
@@ -279,43 +569,7 @@ app.get('/api/espn/team/:id/schedule', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// 2. FORMA RECIENTE DEL EQUIPO — api-sports (Caché 2h)
-// ─────────────────────────────────────────────────────────────────────
-app.get('/api/scrapers/team-form', async (req, res) => {
-  const { teamName, apiSportsId } = req.query;
-  if (!apiSportsId) return res.status(400).json({ error: 'Falta apiSportsId' });
 
-  const cacheKey = `team_form_${apiSportsId}`;
-  const cached   = cacheGet(cacheKey);
-  if (cached) return res.json({ source: 'api-sports', fromCache: true, data: cached });
-
-  try {
-    const r = await apiSports.get('/fixtures', { params: { team: apiSportsId, season: 2024 } });
-    const allFixtures = (r.data.response || []).filter(f => f.fixture.status.short === 'FT');
-    // Tomar los últimos 10 partidos ordenados por fecha
-    const fixtures = allFixtures.sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date)).slice(0, 10).map(f => {
-      const isHome = f.teams.home.id === parseInt(apiSportsId);
-      const hg = f.goals.home, ag = f.goals.away;
-      let result = 'D';
-      if (hg !== null && ag !== null)
-        result = isHome ? (hg > ag ? 'W' : hg < ag ? 'L' : 'D') : (ag > hg ? 'W' : ag < hg ? 'L' : 'D');
-      return {
-        result,
-        score   : `${hg ?? '?'} - ${ag ?? '?'}`,
-        opponent: isHome ? f.teams.away.name : f.teams.home.name,
-        isHome,
-        date    : f.fixture.date,
-      };
-    });
-
-    const payload = { teamName, recentForm: fixtures };
-    cacheSet(cacheKey, payload, 120);
-    return res.json({ source: 'api-sports', fromCache: false, data: payload });
-  } catch (err) {
-    return res.status(500).json({ error: 'Error obteniendo forma del equipo', details: err.message });
-  }
-});
 
 // ─────────────────────────────────────────────────────────────────────
 // 3. xG + ESTADÍSTICAS AVANZADAS — Understat (Caché 6h)
@@ -332,7 +586,7 @@ app.get('/api/scrapers/xg', async (req, res) => {
   const url  = `https://understat.com/team/${encodeURIComponent(slug)}/${season}`;
 
   try {
-    const { data: html } = await http.get(url);
+    const { data: html } = await axiosInstance.get(url);
     const $ = cheerio.load(html);
 
     let datesData = null;
@@ -369,82 +623,37 @@ app.get('/api/scrapers/xg', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// 4. LESIONES / BAJAS — Transfermarkt → Fallback api-sports (Caché 3h)
+// 4. LESIONES / BAJAS — Transfermarkt (Caché 3h)
 // ─────────────────────────────────────────────────────────────────────
 app.get('/api/scrapers/injuries', async (req, res) => {
-  const { teamSlug, apiSportsId } = req.query;
-  if (!teamSlug && !apiSportsId) return res.status(400).json({ error: 'Falta teamSlug o apiSportsId' });
+  const { teamSlug } = req.query;
+  if (!teamSlug) return res.status(400).json({ error: 'Falta teamSlug' });
 
-  const cacheKey = `injuries_${teamSlug || apiSportsId}`;
+  const cacheKey = `injuries_${teamSlug}`;
   const cached   = cacheGet(cacheKey);
   if (cached) return res.json({ source: 'Caché', fromCache: true, data: cached });
 
-  if (teamSlug) {
-    try {
-      const url = `https://www.transfermarkt.com/${teamSlug}/absenzen/verein/0`;
-      const { data: html } = await http.get(url, { headers: { 'Accept-Language': 'en-US,en;q=0.9' } });
-      const $ = cheerio.load(html);
-
-      const injuries = [];
-      $('table.items tbody tr').each((_, row) => {
-        const name   = $(row).find('td.hauptlink a').first().text().trim();
-        const reason = $(row).find('td').eq(3).text().trim();
-        const until  = $(row).find('td').eq(5).text().trim();
-        if (name) injuries.push({ name, reason, returnDate: until });
-      });
-
-      cacheSet(cacheKey, injuries, 180);
-      return res.json({ source: 'Transfermarkt', fromCache: false, data: injuries });
-    } catch (err) {
-      console.warn(`[Transfermarkt] Falló. Usando api-sports.`);
-    }
-  }
-
-  if (!apiSportsId) return res.status(422).json({ error: 'Sin ID para fallback' });
   try {
-    const r      = await apiSports.get('/injuries', { params: { team: apiSportsId, season: 2024 } });
-    const injuries = (r.data.response || []).map(i => ({
-      name      : i.player.name,
-      reason    : i.player.reason,
-      returnDate: null,
-    }));
-    cacheSet(cacheKey, injuries, 180);
-    return res.json({ source: 'api-sports', fromCache: false, data: injuries });
-  } catch (err) {
-    return res.status(500).json({ error: 'Error en bajas', details: err.message });
-  }
-});
+    const url = `https://www.transfermarkt.com/${teamSlug}/absenzen/verein/0`;
+    const { data: html } = await axiosInstance.get(url, { headers: { 'Accept-Language': 'en-US,en;q=0.9' } });
+    const $ = cheerio.load(html);
 
-// ─────────────────────────────────────────────────────────────────────
-// 5. H2H — api-sports (Caché 48h)
-// ─────────────────────────────────────────────────────────────────────
-app.get('/api/scrapers/h2h', async (req, res) => {
-  const { home, away, homeApiId, awayApiId } = req.query;
-  if (!homeApiId || !awayApiId) return res.status(400).json({ error: 'Faltan homeApiId y/o awayApiId' });
-
-  const cacheKey = `h2h_${homeApiId}_${awayApiId}`;
-  const cached   = cacheGet(cacheKey);
-  if (cached) return res.json({ source: 'api-sports', fromCache: true, data: cached });
-
-  try {
-    const r = await apiSports.get('/fixtures/headtohead', {
-      params: { h2h: `${homeApiId}-${awayApiId}` },
+    const injuries = [];
+    $('table.items tbody tr').each((_, row) => {
+      const name   = $(row).find('td.hauptlink a').first().text().trim();
+      const reason = $(row).find('td').eq(3).text().trim();
+      const until  = $(row).find('td').eq(5).text().trim();
+      if (name) injuries.push({ name, reason, returnDate: until });
     });
-    const allFixtures = (r.data.response || []).filter(f => f.fixture.status.short === 'FT');
-    const matches = allFixtures.sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date)).slice(0, 10).map(f => ({
-      date  : f.fixture.date,
-      home  : { name: f.teams.home.name, goals: f.goals.home },
-      away  : { name: f.teams.away.name, goals: f.goals.away },
-      winner: f.teams.home.winner ? f.teams.home.name : f.teams.away.winner ? f.teams.away.name : 'Draw',
-      league: f.league.name,
-    }));
 
-    cacheSet(cacheKey, matches, 2880); // 48h
-    return res.json({ source: 'api-sports', fromCache: false, data: matches });
+    cacheSet(cacheKey, injuries, 180);
+    return res.json({ source: 'Transfermarkt', fromCache: false, data: injuries });
   } catch (err) {
-    return res.status(500).json({ error: 'Error al obtener H2H', details: err.message });
+    return res.status(500).json({ error: 'Error obteniendo bajas', details: err.message });
   }
 });
+
+
 
 
 
@@ -618,6 +827,20 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
   }
 });
 
+app.get('/api/admin/users/:ip/location', authenticateToken, requireAdmin, async (req, res) => {
+  const { ip } = req.params;
+  // Fallbacks for localhost IPs
+  if (ip === '::1' || ip === '127.0.0.1' || ip === '::ffff:127.0.0.1') {
+    return res.json({ status: 'success', country: 'Localhost', regionName: 'Desarrollo', city: 'Local' });
+  }
+  try {
+    const response = await axios.get(`http://ip-api.com/json/${ip}?lang=es`);
+    res.json(response.data);
+  } catch (e) {
+    res.status(500).json({ error: 'Error fetching location' });
+  }
+});
+
 app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
   if (req.params.id == req.user.id) return res.status(400).json({ error: 'No puedes borrar tu propia cuenta' });
   try {
@@ -741,12 +964,54 @@ if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log('\n⚽ ══════════════════════════════════════════════════');
-    console.log(`   CHALACA Backend Ligero  →  http://localhost:${PORT}`);
+    console.log(`   CHALACA Backend  →  http://localhost:${PORT}`);
     console.log('   ══════════════════════════════════════════════════');
+    console.log('   ✓ Fuente de datos: ESPN (100% gratuito)');
     console.log('   ✓ Caché en Memoria Activa');
     console.log('   ✓ Transfermarkt & Understat Scrapers Activos');
-    console.log('   ✓ API-Sports (Caché proxy) Activa');
+    console.log('   ✓ Endpoint /api/espn/match/:id/analysis listo');
     console.log('⚽ ══════════════════════════════════════════════════\n');
+
+    // ── Pre-calentamiento del caché al arrancar ───────────────────────────
+    // Precarga los partidos de hoy en background para que el primer usuario
+    // no experimente la carga lenta de 20+ llamadas a ESPN.
+    const todayKey = new Date().toISOString().slice(0, 10);
+    setTimeout(() => {
+      const dateParam = todayKey.replace(/-/g, '');
+      const preRequests = Object.keys(ALLOWED_LEAGUES).map(l =>
+        axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 3000 })
+          .then(r => ({ slug: l, data: r.data }))
+          .catch(() => null)
+      );
+      Promise.allSettled(preRequests).then(results => {
+        let fixtures = [];
+        let hasLive = false;
+        for (const r of results) {
+          if (r.status !== 'fulfilled' || !r.value?.data?.events) continue;
+          const { slug, data } = r.value;
+          const leagueInfo = data.leagues?.[0];
+          data.events.forEach(e => {
+            const comp = e.competitions?.[0];
+            const home = comp?.competitors?.find(c => c.homeAway === 'home');
+            const away = comp?.competitors?.find(c => c.homeAway === 'away');
+            const statusObj = comp?.status || e.status;
+            const state = statusObj?.type?.state;
+            const getScore = c => { if (!c) return null; return c.score?.value !== undefined ? parseInt(c.score.value) : parseInt(c.score ?? null); };
+            let statusShort = 'NS';
+            if (state === 'post') statusShort = 'FT';
+            else if (state === 'in') { statusShort = statusObj?.period === 1 ? '1H' : '2H'; hasLive = true; }
+            fixtures.push({
+              fixture: { id: e.id, date: e.date, status: { short: statusShort, elapsed: statusObj?.clock ? Math.floor(statusObj.clock / 60) : 0 } },
+              league:  { id: slug, name: ALLOWED_LEAGUES[slug], logo: leagueInfo?.logos?.[0]?.href || '', country: leagueInfo?.shortName || '' },
+              teams:   { home: { id: home?.id, name: home?.team?.displayName || home?.team?.name, logo: home?.team?.logo }, away: { id: away?.id, name: away?.team?.displayName || away?.team?.name, logo: away?.team?.logo } },
+              goals:   { home: getScore(home), away: getScore(away) },
+            });
+          });
+        }
+        cacheSet(`espn_date_${todayKey}`, fixtures, hasLive ? 2 : 5);
+        console.log(`✓ Caché pre-calentado: ${fixtures.length} partidos del ${todayKey}`);
+      }).catch(() => {});
+    }, 1000); // 1s después del arranque para no bloquear el bind del puerto
   });
 }
 

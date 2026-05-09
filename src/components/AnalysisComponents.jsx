@@ -57,9 +57,11 @@ function FormPills({ matches, teamId }) {
                   <span>{date}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`font-black uppercase tracking-widest ${color}`}>{resultLabel}</span>
-                  <span className="font-mono text-lg font-bold text-white">{hg}-{ag}</span>
-                  <span className="text-slate-300">vs {oppName} <span className="text-[10px] text-slate-500">{isHome ? '(L)' : '(V)'}</span></span>
+                <div className="flex items-center gap-3">
+                  <span className={`font-bold uppercase tracking-widest text-[10px] ${color}`}>{resultLabel}</span>
+                  <span className="font-numbers text-lg font-bold text-white">{hg}-{ag}</span>
+                  <span className="text-slate-400 text-[13px]">vs {oppName} <span className="text-[10px] text-slate-500 opacity-60">{isHome ? '(L)' : '(V)'}</span></span>
+                </div>
                 </div>
               </div>
             );
@@ -76,10 +78,10 @@ function FormPills({ matches, teamId }) {
 function StatRow({ label, value, sub, color = 'text-white' }) {
   return (
     <div className="flex items-baseline justify-between py-1.5 border-b border-white/5 last:border-0 overflow-hidden">
-      <span className="text-xs text-slate-400">{label}</span>
+      <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{label}</span>
       <div className="text-right">
-        <span className={`text-sm font-bold font-mono ${color}`}>{value}</span>
-        {sub && <span className="text-[10px] text-slate-500 ml-1.5">{sub}</span>}
+        <span className={`text-[13px] font-bold font-numbers ${color}`}>{value}</span>
+        {sub && <span className="text-[10px] text-slate-500 ml-1.5 opacity-70">{sub}</span>}
       </div>
     </div>
   );
@@ -102,7 +104,7 @@ function ProbCircle({ prob, label, color = '#00ff88' }) {
           strokeLinecap="round"
           style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%', transition: 'stroke-dashoffset 1s ease' }}
         />
-        <text x="50" y="58" textAnchor="middle" fontSize="26" fontWeight="900" fill="white" fontFamily="JetBrains Mono,monospace">
+        <text x="50" y="58" textAnchor="middle" fontSize="24" fontWeight="700" fill="white" className="font-numbers">
           {prob}%
         </text>
       </svg>
@@ -235,9 +237,9 @@ function H2HTable({ matches, homeId, awayId, homeName, awayName }) {
 
             {/* Marcador */}
             <div className="flex items-center justify-center gap-1 w-16">
-              <span className={`text-sm font-black font-mono ${homeWon ? 'text-accent-green' : 'text-slate-300'}`}>{hg}</span>
-              <span className="text-slate-700 font-bold">–</span>
-              <span className={`text-sm font-black font-mono ${awayWon ? 'text-accent-green' : 'text-slate-300'}`}>{ag}</span>
+              <span className={`text-[13px] font-bold font-numbers ${homeWon ? 'text-accent-green' : 'text-slate-300'}`}>{hg}</span>
+              <span className="text-slate-700 font-bold opacity-50">–</span>
+              <span className={`text-[13px] font-bold font-numbers ${awayWon ? 'text-accent-green' : 'text-slate-300'}`}>{ag}</span>
             </div>
 
             {/* Visitante */}
@@ -321,39 +323,50 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
 
         {/* Left: big % block */}
         <div
-          className="flex flex-col items-center justify-center px-4 py-5 shrink-0 min-w-[100px]"
-          style={{ background: `${accent.color}14`, borderRight: `1px solid ${accent.border}` }}
+          className="flex flex-col items-center justify-center px-4 py-5 shrink-0 min-w-[90px]"
+          style={{ background: `${accent.color}08`, borderRight: `1px solid ${accent.border}` }}
         >
           <span
-            className="text-[44px] font-black font-mono leading-none tabular-nums tracking-tighter"
+            className="text-[40px] font-numbers leading-none tracking-tighter"
             style={{
               color: accent.color,
-              textShadow: `0 0 20px ${accent.color}80`,
+              textShadow: `0 0 30px ${accent.color}40`,
             }}
           >
             {pick.probability}%
           </span>
-          <span className="text-[14px] font-bold uppercase tracking-widest mt-1.5"
-            style={{ color: `${accent.color}90` }}>
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em] mt-2 opacity-60"
+            style={{ color: accent.color }}>
             {pick.tier}
           </span>
         </div>
 
         {/* Right: content */}
         <div className="flex flex-col justify-between flex-1 px-5 py-5 gap-2">
-          {/* Market pill */}
-          <span
-            className="text-[11px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full self-start leading-none mb-1"
-            style={{ color: accent.color, background: `${accent.color}18` }}
-          >
-            {pick.market}
-          </span>
+          {/* Header row: Market pill and Odds */}
+          <div className="flex items-center justify-between mb-1">
+            <span
+              className="text-[10px] font-bold uppercase tracking-[0.15em] px-2.5 py-1 rounded-full leading-none"
+              style={{ color: accent.color, background: `${accent.color}12` }}
+            >
+              {pick.market}
+            </span>
+            {pick.odds && (
+              <div 
+                className="flex items-center gap-2 px-3 py-1 rounded-lg border border-white/5"
+                style={{ background: 'rgba(255,255,255,0.03)' }}
+              >
+                <span className="text-[9px] uppercase tracking-widest font-bold opacity-40 text-white">Cuota</span>
+                <span className="text-[16px] font-numbers text-white leading-none">{pick.odds}</span>
+              </div>
+            )}
+          </div>
 
           {/* Selection — the main text, big and bold */}
           <div>
-            <p className="text-[22px] font-black text-white leading-tight">{pick.selection}</p>
+            <p className="text-[18px] font-bold text-white leading-tight tracking-tight">{pick.selection}</p>
             {pick.argument && (
-              <p className="text-[15px] text-slate-300 leading-snug line-clamp-3 mt-2">{pick.argument}</p>
+              <p className="text-[13px] text-slate-400 leading-relaxed line-clamp-3 mt-2">{pick.argument}</p>
             )}
           </div>
 

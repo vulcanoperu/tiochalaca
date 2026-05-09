@@ -109,14 +109,14 @@ export default function PicksPage() {
 
   if (user?.role === 'pending') {
     return (
-      <div className="max-w-screen-md mx-auto px-4 py-8 mt-10">
+      <div className="w-full py-8 mt-10">
         <PendingWall />
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 animate-fade-in space-y-8">
+    <div className="w-full animate-fade-in space-y-8">
       
       {/* ── PANEL ESTADÍSTICO ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

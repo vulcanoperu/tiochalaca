@@ -1,216 +1,313 @@
 import { useState } from 'react';
-import { Settings, Key, ExternalLink, Check, Eye, EyeOff, Info, RefreshCw, AlertTriangle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { checkApiStatus } from '../services/footballApi';
-import toast from 'react-hot-toast';
+import { 
+  Settings, ShieldCheck, Check, AlertTriangle, 
+  User, Sliders, Layout, Bell, Database, Crown, ChevronRight 
+} from 'lucide-react';
 
-const STEPS = [
-  { n: 1, t: 'Registrarse gratis', d: 'Ve a api-football.com y crea una cuenta gratuita.' },
-  { n: 2, t: 'Obtener API Key',    d: 'En el dashboard encontrarás tu API Key única.' },
-  { n: 3, t: 'Pegar aquí',         d: 'Pega una o varias keys (separadas por coma).' },
-  { n: 4, t: 'Verificar quota',    d: 'Presiona "Verificar" para confirmar que funciona.' },
+const TABS = [
+  { id: 'account', icon: User, label: 'Perfil y Cuenta' },
+  { id: 'preferences', icon: Sliders, label: 'Análisis y Preferencias' },
+  { id: 'interface', icon: Layout, label: 'Personalización' },
+  { id: 'notifications', icon: Bell, label: 'Notificaciones' },
+  { id: 'data', icon: Database, label: 'Datos y Sistema' },
+  { id: 'about', icon: ShieldCheck, label: 'Acerca de Chalaca' },
 ];
 
 export default function SettingsPage() {
-  const { apiKey, saveApiKey, apiQuota, setApiQuota } = useApp();
-  const [inputKey, setInputKey]     = useState(apiKey);
-  const [showKey, setShowKey]       = useState(false);
-  const [testing, setTesting]       = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [saved, setSaved]           = useState(false);
-
-  const handleSave = () => {
-    if (!inputKey.trim()) return;
-    saveApiKey(inputKey.trim());
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-    toast.success('API Key guardada correctamente');
-  };
-
-  const handleTest = async () => {
-    if (!inputKey.trim()) { toast.error('Ingresa una API Key primero'); return; }
-    // Temporarily save to allow api call
-    saveApiKey(inputKey.trim());
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const statusData = await checkApiStatus();
-      const status = statusData[0];
-      if (status) {
-        const quota = {
-          limit:     status.requests?.limit_day  ?? 100,
-          remaining: status.requests?.remaining  ?? 0,
-          used:      status.requests?.current    ?? 0,
-        };
-        setApiQuota(quota);
-        setTestResult({ ok: true, quota });
-        toast.success(`✅ API activa · ${quota.remaining} requests restantes`);
-      } else {
-        setTestResult({ ok: false, msg: 'Respuesta vacía. Verifica la key.' });
-        toast.error('API Key inválida o sin acceso');
-      }
-    } catch (e) {
-      setTestResult({ ok: false, msg: e.message });
-      toast.error('Error al conectar con la API');
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const usagePct = apiQuota ? Math.round((apiQuota.used / apiQuota.limit) * 100) : 0;
+  const [activeTab, setActiveTab] = useState('account');
+  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
+  const { theme, setTheme, font, setFont, textSize, setTextSize } = useApp();
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-6 animate-fade-in space-y-4">
+    <div className="w-full animate-fade-in space-y-6">
       {/* Header */}
       <div>
         <p className="section-title mb-1">Configuración</p>
         <h1 className="text-2xl font-bold text-white flex items-center gap-2">
           <Settings size={22} className="text-accent-green" />
-          Ajustes
+          Ajustes del Sistema
         </h1>
       </div>
 
-      {/* API Setup guide */}
-      <div className="glass-card p-5">
-        <h2 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
-          <Info size={15} className="text-accent-green" />
-          Cómo obtener tu API Key gratuita
-        </h2>
-        <div className="space-y-3">
-          {STEPS.map(s => (
-            <div key={s.n} className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-xs font-bold"
-                style={{ background: 'rgba(0,255,136,0.15)', color: '#00ff88', border: '1px solid rgba(0,255,136,0.3)' }}>
-                {s.n}
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-white">{s.t}</p>
-                <p className="text-xs text-slate-500 mt-0.5">{s.d}</p>
-              </div>
-            </div>
+      <div className="flex flex-col md:flex-row gap-6">
+        
+        {/* Sidebar Menu */}
+        <div className="w-full md:w-64 flex-shrink-0 space-y-1">
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`settings-menu-item ${activeTab === tab.id ? 'active' : ''}`}
+            >
+              <span className="flex items-center gap-3">
+                <tab.icon size={16} className={activeTab === tab.id ? 'text-accent-green' : 'opacity-70'} />
+                {tab.label}
+              </span>
+              <ChevronRight size={14} className={`transition-transform ${activeTab === tab.id ? 'opacity-100 translate-x-1' : 'opacity-0'}`} />
+            </button>
           ))}
         </div>
-        <a href="https://dashboard.api-football.com/register"
-          target="_blank" rel="noreferrer"
-          className="btn-primary mt-5 inline-flex text-xs">
-          <ExternalLink size={13} /> Registrarme en API-Football
-        </a>
-        <div className="mt-4 p-3 rounded-lg text-xs space-y-1"
-          style={{ background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.15)' }}>
-          <p className="text-amber-400 font-semibold flex items-center gap-1.5">
-            <AlertTriangle size={12} /> Plan Gratuito
-          </p>
-          <p className="text-slate-400">100 requests/día por cada cuenta · Usa múltiples cuentas separadas por coma para multiplicar tu límite.</p>
-        </div>
-      </div>
 
-      {/* Input */}
-      <div className="glass-card p-5">
-        <h2 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
-          <Key size={15} className="text-accent-green" />
-          API Key
-        </h2>
-        <div className="space-y-3">
-          <div className="relative">
-            <input
-              id="api-key-input"
-              type={showKey ? 'text' : 'password'}
-              value={inputKey}
-              onChange={e => setInputKey(e.target.value)}
-              placeholder="Pega tu(s) API Key(s) separadas por coma…"
-              className="input-field pr-10 font-mono"
-            />
-            <button onClick={() => setShowKey(s => !s)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
-              {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
-            </button>
-          </div>
-
-          <div className="flex gap-2">
-            <button onClick={handleSave} disabled={!inputKey.trim() || saved}
-              className="btn-primary flex-1 justify-center">
-              {saved ? <><Check size={14} /> Guardado</> : <>Guardar</>}
-            </button>
-            <button onClick={handleTest} disabled={testing || !inputKey.trim()}
-              className="btn-ghost border border-surface-600 flex-1 justify-center text-slate-300">
-              {testing ? <><RefreshCw size={13} className="animate-spin" /> Verificando…</> : <><RefreshCw size={13} /> Verificar</>}
-            </button>
-          </div>
-
-          {/* Test result */}
-          {testResult && (
-            <div className={`rounded-lg p-3 text-xs ${testResult.ok ? 'badge-green' : 'badge-red'}`}
-              style={{
-                background: testResult.ok ? 'rgba(0,255,136,0.08)' : 'rgba(255,71,87,0.08)',
-                border: `1px solid ${testResult.ok ? 'rgba(0,255,136,0.25)' : 'rgba(255,71,87,0.25)'}`,
-                color: testResult.ok ? '#00ff88' : '#ff4757',
-                display: 'block',
-                borderRadius: '8px',
-                padding: '10px 12px',
-              }}>
-              {testResult.ok
-                ? `✅ Conexión exitosa · ${testResult.quota.remaining}/${testResult.quota.limit} requests disponibles`
-                : `❌ ${testResult.msg}`}
+        {/* Content Area */}
+        <div className="flex-1 glass-card p-6 min-h-[400px]">
+          
+          {/* TAB: PERFIL Y CUENTA */}
+          {activeTab === 'account' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Perfil y Cuenta</h2>
+                  <p className="text-xs text-slate-400 mt-1">Gestiona tu información personal y membresía.</p>
+                </div>
+                {user.role === 'vip' && (
+                  <span className="badge-yellow"><Crown size={10}/> VIP</span>
+                )}
+              </div>
+              
+              <div className="space-y-4">
+                {/* Placeholder para formulario de cuenta */}
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Formulario de Avatar, Usuario y Contraseña]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Gestión de Membresía / Upgrade a VIP]
+                </div>
+              </div>
             </div>
           )}
-        </div>
-      </div>
 
-      {/* Quota stats */}
-      {apiQuota && (
-        <div className="glass-card p-5">
-          <h2 className="text-sm font-bold text-white mb-4">Uso de API</h2>
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {[
-              { label: 'Usados', value: apiQuota.used,      color: '#ff4757' },
-              { label: 'Restantes', value: apiQuota.remaining, color: '#00ff88' },
-              { label: 'Límite/día', value: apiQuota.limit,  color: '#1e90ff' },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="text-center rounded-lg p-3"
-                style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)' }}>
-                <p className="text-xl font-bold font-mono" style={{ color }}>{value}</p>
-                <p className="text-[10px] text-slate-500">{label}</p>
+          {/* TAB: ANÁLISIS Y PREFERENCIAS */}
+          {activeTab === 'preferences' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-white/5 pb-4">
+                <h2 className="text-lg font-bold text-white">Análisis y Preferencias</h2>
+                <p className="text-xs text-slate-400 mt-1">Ajusta cómo el motor de Chalaca calcula y muestra las oportunidades.</p>
               </div>
-            ))}
-          </div>
-          <div className="stat-bar h-2.5">
-            <div className="stat-bar-fill"
-              style={{ width: `${usagePct}%`, background: usagePct > 80 ? 'linear-gradient(90deg,#ff4757,#ff6b6b)' : undefined }} />
-          </div>
-          <p className="text-xs text-slate-600 text-right mt-1">{usagePct}% usado hoy</p>
-        </div>
-      )}
-
-      {/* Ligas disponibles */}
-      <div className="glass-card p-5">
-        <h2 className="text-sm font-bold text-white mb-3">Ligas monitoreadas</h2>
-        <div className="space-y-2">
-          {[
-            { flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿', name:'Premier League', country:'England' },
-            { flag:'🇪🇸', name:'La Liga', country:'Spain' },
-            { flag:'🇩🇪', name:'Bundesliga', country:'Germany' },
-            { flag:'🇮🇹', name:'Serie A', country:'Italy' },
-            { flag:'🇫🇷', name:'Ligue 1', country:'France' },
-            { flag:'🇪🇺', name:'UEFA Champions League', country:'Europe' },
-            { flag:'🇪🇺', name:'UEFA Europa League', country:'Europe' },
-          ].map(l => (
-            <div key={l.name} className="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0">
-              <span className="text-lg">{l.flag}</span>
-              <div>
-                <p className="text-xs font-semibold text-slate-200">{l.name}</p>
-                <p className="text-[10px] text-slate-600">{l.country}</p>
+              <div className="space-y-4">
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Selector de Formato de Cuotas: Decimal, Fraccional, Americano]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Perfil de Riesgo: Conservador, Moderado, Agresivo]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Configuración de Unidad de Stake Default]
+                </div>
               </div>
-              <span className="ml-auto badge-green text-[9px]">Activa</span>
             </div>
-          ))}
-        </div>
-      </div>
+          )}
 
-      {/* Disclaimer */}
-      <div className="rounded-xl p-4 text-xs text-slate-500 space-y-1 leading-relaxed"
-        style={{ background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)' }}>
-        <p className="text-slate-400 font-semibold">⚠️ Aviso legal</p>
-        <p>Esta aplicación es únicamente una herramienta de análisis estadístico. No garantiza resultados ni constituye asesoramiento financiero. Las apuestas deportivas implican riesgo de pérdida. Apuesta con responsabilidad y dentro de tus posibilidades.</p>
+          {/* TAB: PERSONALIZACIÓN */}
+          {activeTab === 'interface' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-white/5 pb-4">
+                <h2 className="text-lg font-bold text-white">Personalización</h2>
+                <p className="text-xs text-slate-400 mt-1">Adapta la interfaz visual a tus necesidades.</p>
+              </div>
+              <div className="space-y-5">
+                {/* Selector de Tema */}
+                <div className="p-4 border border-white/5 rounded-xl bg-white/[0.02]">
+                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                    <Layout size={16} className="text-accent-blue" />
+                    Estilo Visual (Tema)
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {[
+                      { id: 'standard', name: 'Estándar', desc: 'Negro Profundo (Actual)', color: 'bg-[#030507]' },
+                      { id: 'dark', name: 'Oscuro', desc: 'Azul Pizarra Suave', color: 'bg-slate-900' },
+                      { id: 'light', name: 'Claro', desc: 'Blanco y Limpio', color: 'bg-slate-100' }
+                    ].map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setTheme(t.id)}
+                        className={`p-3 rounded-lg border text-left transition-all ${
+                          theme === t.id 
+                            ? 'border-accent-blue bg-accent-blue/10' 
+                            : 'border-white/10 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className={`w-4 h-4 rounded-full border border-black/20 shadow-inner ${t.color}`} />
+                          <span className={`text-sm font-bold ${theme === t.id ? 'text-accent-blue' : 'text-slate-200'}`}>{t.name}</span>
+                          {theme === t.id && <Check size={14} className="text-accent-blue ml-auto" />}
+                        </div>
+                        <p className="text-[10px] text-slate-400">{t.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Selector de Tipografía */}
+                <div className="p-4 border border-white/5 rounded-xl bg-white/[0.02]">
+                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                    <span className="text-accent-blue font-serif italic text-lg leading-none">T</span>
+                    Tipografía (Fuente)
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {[
+                      { id: 'outfit', name: 'Outfit', desc: 'Moderna y Limpia (Actual)' },
+                      { id: 'jakarta', name: 'Plus Jakarta Sans', desc: 'Elegante y Dinámica' },
+                      { id: 'inter', name: 'Inter', desc: 'Estilo Técnico' },
+                      { id: 'roboto', name: 'Roboto', desc: 'Máxima Legibilidad' }
+                    ].map(f => (
+                      <button
+                        key={f.id}
+                        onClick={() => setFont(f.id)}
+                        className={`p-3 rounded-lg border text-left transition-all ${
+                          font === f.id 
+                            ? 'border-accent-blue bg-accent-blue/10' 
+                            : 'border-white/10 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 mb-1">
+                          <span className={`text-xl font-bold ${font === f.id ? 'text-accent-blue' : 'text-slate-200'}`} style={{ fontFamily: f.name }}>Aa</span>
+                          {font === f.id && <Check size={14} className="text-accent-blue ml-auto" />}
+                        </div>
+                        <p className="text-sm font-bold text-white mt-1" style={{ fontFamily: f.name }}>{f.name}</p>
+                        <p className="text-[10px] text-slate-400 mt-1">{f.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Selector de Tamaño de Texto */}
+                <div className="p-4 border border-white/5 rounded-xl bg-white/[0.02]">
+                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                    <span className="text-accent-blue font-serif italic text-lg leading-none">A</span>
+                    Tamaño de Texto
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {[
+                      { id: 'small', name: 'Pequeño', desc: 'Más densidad de datos' },
+                      { id: 'medium', name: 'Mediano', desc: 'Equilibrado (Actual)' },
+                      { id: 'large', name: 'Grande', desc: 'Máxima legibilidad' },
+                      { id: 'xlarge', name: 'Extra', desc: 'Accesibilidad Total' }
+                    ].map(ts => (
+                      <button
+                        key={ts.id}
+                        onClick={() => setTextSize(ts.id)}
+                        className={`p-3 rounded-lg border text-left transition-all ${
+                          textSize === ts.id 
+                            ? 'border-accent-blue bg-accent-blue/10' 
+                            : 'border-white/10 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 mb-1">
+                          <span className={`font-bold ${textSize === ts.id ? 'text-accent-blue' : 'text-slate-200'} ${ts.id === 'small' ? 'text-sm' : ts.id === 'medium' ? 'text-base' : ts.id === 'large' ? 'text-lg' : 'text-xl'}`}>Aa</span>
+                          {textSize === ts.id && <Check size={14} className="text-accent-blue ml-auto" />}
+                        </div>
+                        <p className="text-sm font-bold text-white mt-1">{ts.name}</p>
+                        <p className="text-[10px] text-slate-400 mt-1">{ts.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Selector de Ligas Favoritas Pinceladas]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Ajuste de Zona Horaria Manual / Automática]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Toggle para ocultar/mostrar Stats Avanzadas]
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: NOTIFICACIONES */}
+          {activeTab === 'notifications' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-white/5 pb-4">
+                <h2 className="text-lg font-bold text-white">Notificaciones</h2>
+                <p className="text-xs text-slate-400 mt-1">Controla las alertas y avisos del sistema.</p>
+              </div>
+              <div className="space-y-4">
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Toggles de Alertas VIP 💎]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Recordatorios de inicio de partidos guardados]
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: DATOS Y SISTEMA */}
+          {activeTab === 'data' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-white/5 pb-4">
+                <h2 className="text-lg font-bold text-white">Datos y Sistema</h2>
+                <p className="text-xs text-slate-400 mt-1">Administra tu información y el estado de la aplicación.</p>
+              </div>
+              <div className="space-y-4">
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm text-red-500/50">
+                  [Botón: Borrar Historial de Picks Guardados]
+                </div>
+                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
+                  [Botón: Limpiar Caché Local de Partidos]
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: ACERCA DE CHALACA (El contenido original) */}
+          {activeTab === 'about' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+              <div className="border-b border-white/5 pb-4">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-accent-green" />
+                  Sistema de Datos Autónomo
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">Información sobre el motor de Chalaca Analytics.</p>
+              </div>
+              
+              <div className="space-y-5">
+                <p className="text-sm text-slate-300 leading-relaxed">
+                  Chalaca Analytics opera con un motor de datos <strong>100% independiente</strong>. 
+                  Extraemos, normalizamos y calculamos métricas avanzadas (córners, tarjetas, xG) 
+                  en tiempo real sin depender de proveedores de terceros con límites restrictivos.
+                </p>
+                <div className="p-3 rounded-lg text-xs space-y-1"
+                  style={{ background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.15)' }}>
+                  <p className="text-accent-green font-semibold flex items-center gap-1.5">
+                    <Check size={12} /> Estado del Servidor Local
+                  </p>
+                  <p className="text-slate-400">Conexión a base de datos de historial y estadísticas operando al 100%.</p>
+                </div>
+
+                <div className="pt-4 border-t border-white/5">
+                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Ligas Monitoreadas</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {[
+                      { flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿', name:'Premier League' },
+                      { flag:'🇪🇸', name:'La Liga' },
+                      { flag:'🇩🇪', name:'Bundesliga' },
+                      { flag:'🇮🇹', name:'Serie A' },
+                      { flag:'🇫🇷', name:'Ligue 1' },
+                      { flag:'🇪🇺', name:'Champions League' },
+                      { flag:'🌎', name:'Libertadores' },
+                    ].map(l => (
+                      <div key={l.name} className="flex items-center gap-2 py-1 px-2 bg-white/5 rounded-md border border-white/5">
+                        <span className="text-sm">{l.flag}</span>
+                        <span className="text-xs font-semibold text-slate-300">{l.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl p-4 text-xs text-slate-500 space-y-1 leading-relaxed mt-6"
+                  style={{ background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)' }}>
+                  <p className="text-slate-400 font-semibold flex items-center gap-1.5"><AlertTriangle size={12}/> Aviso legal</p>
+                  <p>Esta aplicación es únicamente una herramienta de análisis estadístico. No garantiza resultados ni constituye asesoramiento financiero. Apuesta con responsabilidad y dentro de tus posibilidades.</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
     </div>
   );

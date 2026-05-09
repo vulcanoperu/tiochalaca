@@ -29,3 +29,11 @@ backend/check*.js
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch and Temp
+scratch/
+*.txt
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
