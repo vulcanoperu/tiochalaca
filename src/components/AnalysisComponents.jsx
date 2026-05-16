@@ -257,21 +257,12 @@ function H2HTable({ matches, homeId, awayId, homeName, awayName }) {
  * PicksTable — tabs (Pre-Partido / En Vivo) + compact aesthetic cards
  */
 function PicksTable({ picks, reason, onSavePick, isLive }) {
-  if (!picks || picks.length === 0) {
-    return (
-      <div className="text-center py-8">
-        <div className="text-3xl mb-3">🚫</div>
-        <p className="text-sm font-semibold text-slate-300 mb-1">Sin apuestas recomendadas</p>
-        <p className="text-xs text-slate-500 max-w-xs mx-auto">{reason || 'No se encontró ventaja estadística suficiente.'}</p>
-      </div>
-    );
-  }
-
+  const picksArray = picks || [];
   const isLivePick = (market) =>
-    market.toLowerCase().includes('vivo') || market.toLowerCase().includes('live');
+    market?.toLowerCase()?.includes('vivo') || market?.toLowerCase()?.includes('live');
 
-  const preMatchPicks = picks.filter(p => !isLivePick(p.market));
-  const livePicks     = picks.filter(p =>  isLivePick(p.market));
+  const preMatchPicks = picksArray.filter(p => !isLivePick(p.market));
+  const livePicks     = picksArray.filter(p =>  isLivePick(p.market));
 
   // Si el partido está en vivo y hay picks en vivo → activar tab live.
   // Si el partido no ha comenzado → siempre mostrar pre-partido primero.
@@ -365,18 +356,32 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
           {/* Selection — the main text, big and bold */}
           <div>
             <p className="text-[18px] font-bold text-white leading-tight tracking-tight">{pick.selection}</p>
-            {pick.argument && (
-              <p className="text-[13px] text-slate-400 leading-relaxed line-clamp-3 mt-2">{pick.argument}</p>
+            {/* Narrative: explicación en lenguaje sencillo (prioridad) */}
+            {(pick.narrative || pick.argument) && (
+              <>
+                <div className="mt-3 mb-2 border-t border-white/5" />
+                <p className="text-[13px] text-slate-300 leading-relaxed">
+                  {pick.narrative || pick.argument}
+                </p>
+              </>
             )}
           </div>
 
           {/* Bottom row */}
           <div className="flex items-center justify-between gap-1 mt-3">
-            <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${
-              pick.risk === 'Bajo' ? 'bg-accent-green/15 text-accent-green'
-              : pick.risk === 'Moderado' ? 'bg-amber-400/15 text-amber-400'
-              : 'bg-red-500/15 text-red-400'
-            }`}>{pick.risk}</span>
+            <div className="flex gap-2">
+              <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${
+                pick.risk === 'Bajo' ? 'bg-accent-green/15 text-accent-green'
+                : pick.risk === 'Moderado' ? 'bg-amber-400/15 text-amber-400'
+                : 'bg-red-500/15 text-red-400'
+              }`}>{pick.risk}</span>
+              
+              {pick.suggestedStake > 0 && (
+                <span className="text-[10px] px-2.5 py-1 rounded-full font-bold uppercase flex items-center gap-1 bg-blue-500/15 text-blue-400 border border-blue-500/20" title="Stake sugerido según Criterio de Kelly">
+                  💰 Stake {pick.suggestedStake}%
+                </span>
+              )}
+            </div>
             
             {saved ? (
               <span className="text-[11px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest text-surface-900 bg-accent-green flex items-center gap-1 shadow-[0_0_10px_rgba(0,255,136,0.5)]">
@@ -414,42 +419,61 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
     <div className="space-y-3">
       {/* Pill-style tabs */}
       <div className="flex gap-1 p-1 rounded-xl bg-white/5 border border-white/5">
-        {preMatchPicks.length > 0 && (
-          <button
-            onClick={() => setActiveTab('pre')}
-            className={`flex-1 text-[13px] font-bold py-2.5 px-3 rounded-[10px] uppercase tracking-widest transition-all duration-200 ${
-              activeTab === 'pre'
-                ? 'bg-accent-green text-surface-900 shadow'
-                : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            ⚽ Pre-Partido
-          </button>
-        )}
-        {livePicks.length > 0 && (
-          <button
-            onClick={() => setActiveTab('live')}
-            className={`flex-1 text-[13px] font-bold py-2.5 px-3 rounded-[10px] uppercase tracking-widest transition-all duration-200 ${
-              activeTab === 'live'
-                ? 'bg-amber-500 text-surface-900 shadow'
-                : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            🔴 En Vivo
-          </button>
-        )}
+        <button
+          onClick={() => setActiveTab('pre')}
+          className={`flex-1 text-[13px] font-bold py-2.5 px-3 rounded-[10px] uppercase tracking-widest transition-all duration-200 ${
+            activeTab === 'pre'
+              ? 'bg-accent-green text-surface-900 shadow'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          ⚽ Pre-Partido
+        </button>
+        <button
+          onClick={() => setActiveTab('live')}
+          className={`flex-1 text-[13px] font-bold py-2.5 px-3 rounded-[10px] uppercase tracking-widest transition-all duration-200 ${
+            activeTab === 'live'
+              ? 'bg-amber-500 text-surface-900 shadow'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          🔴 En Vivo
+        </button>
       </div>
 
       {/* Cards grid */}
-      {activeTab === 'pre' && preMatchPicks.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {preMatchPicks.map((pick, i) => <PickCard key={`pre-${i}`} pick={pick} />)}
-        </div>
+      {activeTab === 'pre' && (
+        preMatchPicks.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {preMatchPicks.map((pick, i) => <PickCard key={`pre-${i}`} pick={pick} />)}
+          </div>
+        ) : (
+          <div className="text-center py-8 bg-surface-900/30 rounded-xl border border-white/5">
+            <div className="text-3xl mb-3 opacity-50">⚽</div>
+            <p className="text-sm font-semibold text-slate-300 mb-1">Sin apuestas pre-partido</p>
+            <p className="text-xs text-slate-500 max-w-xs mx-auto">
+              {reason || 'El motor predictivo no encontró una ventaja matemática clara para recomendar una apuesta antes del encuentro.'}
+            </p>
+          </div>
+        )
       )}
-      {activeTab === 'live' && livePicks.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {livePicks.map((pick, i) => <PickCard key={`live-${i}`} pick={pick} />)}
-        </div>
+      
+      {activeTab === 'live' && (
+        livePicks.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {livePicks.map((pick, i) => <PickCard key={`live-${i}`} pick={pick} />)}
+          </div>
+        ) : (
+          <div className="text-center py-8 bg-surface-900/30 rounded-xl border border-white/5">
+            <div className="text-3xl mb-3 opacity-50">🔴</div>
+            <p className="text-sm font-semibold text-slate-300 mb-1">Esperando oportunidades en vivo</p>
+            <p className="text-xs text-slate-500 max-w-xs mx-auto">
+              {!isLive 
+                ? 'El partido aún no ha comenzado. Las recomendaciones en vivo aparecerán aquí mientras el balón esté rodando.' 
+                : 'El partido está en curso, pero el sistema aún no detecta oportunidades tácticas de alta probabilidad. Se actualizará automáticamente.'}
+            </p>
+          </div>
+        )
       )}
 
       <p className="text-[9px] text-slate-600 text-center">Toca una tarjeta para guardarla</p>

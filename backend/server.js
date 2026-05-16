@@ -44,6 +44,40 @@ function cacheSet(key, data, ttlMinutes = 60) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// CACHÉ PERSISTENTE — Supabase (para partidos terminados)
+// TTL por defecto: 30 días (720h). Los datos son inmutables post-FT.
+// Si la tabla no existe aún, falla silenciosamente (usa solo memoria).
+// ─────────────────────────────────────────────────────────────────────
+async function supabaseCacheGet(eventId) {
+  try {
+    const { data, error } = await supabase
+      .from('analysis_cache')
+      .select('data')
+      .eq('event_id', String(eventId))
+      .gt('expires_at', new Date().toISOString())
+      .single();
+    if (error || !data) return null;
+    return data.data;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function supabaseCacheSet(eventId, analysisData, ttlHours = 720) {
+  try {
+    const expiresAt = new Date(Date.now() + ttlHours * 3_600_000).toISOString();
+    await supabase
+      .from('analysis_cache')
+      .upsert(
+        { event_id: String(eventId), data: analysisData, match_state: 'post', expires_at: expiresAt },
+        { onConflict: 'event_id' }
+      );
+  } catch (e) {
+    // Fallo silencioso — la tabla aún no existe o hay error de conexión
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // HTTP CLIENTE AXIOS  (para Understat y Transfermarkt)
 // ─────────────────────────────────────────────────────────────────────
 const http = axios.create({
@@ -250,21 +284,28 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
 // con /api/espn/summary/:eventId (linea 101) que ya usa getMatchSummary con caché.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ANÁLISIS COMPLETO DE PARTIDO — Un solo endpoint que reemplaza ~24 llamadas
-// del frontend. Mueve el trabajo pesado al servidor donde hay caché en memoria.
-// Para ligas SAM sin boxscore, retorna null en corners/tarjetas (no error)
-// para que el motor de análisis active el fallback Poisson automáticamente.
+// HELPER CENTRAL: computeMatchAnalysis(eventId)
+// Flujo de caché: Memoria (ms) → Supabase (ms) → ESPN scraping (s)
+// Reutilizado por el endpoint individual y el endpoint batch.
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
-  const { eventId } = req.params;
+async function computeMatchAnalysis(eventId, refresh = false) {
   const cacheKey = `match_analysis_${eventId}`;
-  const cached = cacheGet(cacheKey);
-  if (cached) return res.json({ fromCache: true, data: cached });
 
+  if (!refresh) {
+    const inMemory = cacheGet(cacheKey);
+    if (inMemory) return { data: inMemory, fromCache: 'memory' };
+
+    const fromSupabase = await supabaseCacheGet(eventId);
+    if (fromSupabase) {
+      cacheSet(cacheKey, fromSupabase, 240);
+      return { data: fromSupabase, fromCache: 'supabase' };
+    }
+  }
+
+  // 3. Scraping ESPN (frío — sin caché)
   try {
-    // 1. Resumen principal del partido
-    const summary = await getMatchSummary(eventId);
-    if (!summary?.header) return res.status(404).json({ error: 'Partido no encontrado' });
+    const summary = await getMatchSummary(eventId, refresh);
+    if (!summary?.header) return { data: null, fromCache: false };
 
     const comp     = summary.header.competitions[0];
     const homeComp = comp.competitors.find(c => c.homeAway === 'home');
@@ -355,22 +396,27 @@ app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
       };
     });
 
-    // 6. Análisis de Corners — retorna null si ESPN no provee boxscore (ej. Liga 1 Perú)
-    //    El motor de análisis omite el mercado de corners automáticamente cuando recibe null.
-    const getTeamCorners = (s, tid) => {
+    // 6. Análisis Estadístico Avanzado (Corners, Remates, Faltas, Fueras de Juego)
+    const getTeamStat = (s, tid, statName) => {
       const teams = s?.boxscore?.teams || [];
-      if (!teams[0]?.statistics) return null;  // ← Fallback SAM: no hay stats
-      const t    = teams.find(t => String(t.team?.id) === String(tid));
-      const stat = t?.statistics?.find(s => s.name === 'wonCorners')?.displayValue;
-      return stat != null ? parseInt(stat) : null;
+      if (!teams[0]?.statistics) return null;
+      const t = teams.find(t => String(t.team?.id) === String(tid));
+      const stat = t?.statistics?.find(s => s.name === statName)?.displayValue;
+      return stat != null ? parseFloat(stat) : null;
     };
-    const analyzeCorners = (hist, tid) => {
-      const arr = hist.map(s => getTeamCorners(s, tid)).filter(c => c !== null);
-      if (!arr.length) return null; // null = "sin datos" → el motor usa Poisson puro
+    const analyzeStat = (hist, tid, statName, thresholds) => {
+      const arr = hist.map(s => getTeamStat(s, tid, statName)).filter(c => c !== null && !isNaN(c));
+      if (!arr.length) return null;
       const total = arr.reduce((a, b) => a + b, 0);
-      return { avg: (total / arr.length).toFixed(1), total, max: Math.max(...arr),
-               matches: arr.length, over3: arr.filter(c => c > 3).length,
-               over4: arr.filter(c => c > 4).length, over5: arr.filter(c => c > 5).length };
+      const res = { 
+        avg: +(total / arr.length).toFixed(1), total, max: Math.max(...arr), matches: arr.length 
+      };
+      if (thresholds) {
+        thresholds.forEach(th => {
+          res[`over${th}`] = arr.filter(c => c > th).length;
+        });
+      }
+      return res;
     };
 
     // 7. Análisis de Tarjetas — retorna null si no hay keyEvents (ej. Venezuela)
@@ -460,8 +506,10 @@ app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
     try {
       const st = summary.standings?.groups?.[0]?.standings?.entries;
       if (st?.length > 0) {
-        const hSt = st.find(s => String(s.team?.id) === String(homeId));
-        const aSt = st.find(s => String(s.team?.id) === String(awayId));
+        // ESPN standings en el summary: el ID del equipo está en entry.id, NO en entry.team.id
+        // (entry.team es un string con el nombre del equipo)
+        const hSt = st.find(s => String(s.id) === String(homeId));
+        const aSt = st.find(s => String(s.id) === String(awayId));
         if (hSt && aSt) matchStandings = {
           homeRank: hSt.stats?.find(s => s.name === 'rank')?.value,
           awayRank: aSt.stats?.find(s => s.name === 'rank')?.value,
@@ -469,6 +517,38 @@ app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
         };
       }
     } catch (_) {}
+
+    // 11b. Fallback: si el summary no trajo tabla (partido finalizado), la pedimos por separado
+    if (!matchStandings && leagueSlug && leagueSlug !== 'all') {
+      try {
+        const stRes = await axios.get(
+          `https://site.api.espn.com/apis/v2/sports/soccer/${leagueSlug}/standings`,
+          { timeout: 4000 }
+        );
+        const entries = stRes.data?.standings?.entries || 
+                        stRes.data?.children?.[0]?.standings?.entries || [];
+        if (entries.length > 0) {
+          // El endpoint /standings usa entry.team.id; el del summary usa entry.id
+          const findEntry = (e, id) => String(e.team?.id) === String(id) || String(e.id) === String(id);
+          const hSt = entries.find(e => findEntry(e, homeId));
+          const aSt = entries.find(e => findEntry(e, awayId));
+          if (hSt && aSt) {
+            const getRank = (e) => {
+              return e.stats?.find(s => s.name === 'rank')?.value
+                  || e.stats?.find(s => s.abbreviation === 'RK')?.value
+                  || entries.indexOf(e) + 1;
+            };
+            matchStandings = {
+              homeRank: getRank(hSt),
+              awayRank: getRank(aSt),
+              total: entries.length,
+            };
+          }
+        }
+      } catch (_) {
+        // Si falla el endpoint de standings, seguimos sin datos
+      }
+    }
 
     // 12. Stats avanzadas (xG, posesión) — null para ligas sin boxscore
     let advancedStats = null;
@@ -484,6 +564,22 @@ app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
         };
       }
     } catch (_) {}
+    // 13. Datos del Árbitro
+    let refereeStats = null;
+    try {
+      const refereeName = summary.gameInfo?.officials?.[0]?.fullName || 
+                          summary.header?.competitions?.[0]?.officials?.[0]?.fullName || 
+                          summary.officials?.[0]?.fullName ||
+                          summary.boxscore?.officials?.[0]?.fullName;
+      if (refereeName) {
+        const { data: refCache } = await supabase.from('analysis_cache').select('data').eq('event_id', `referee_${refereeName}`).single();
+        if (refCache && refCache.data) {
+          refereeStats = refCache.data;
+        } else {
+          refereeStats = { name: refereeName, matches: 0, yellow: 0, red: 0, avgYellow: 0, avgRed: 0 };
+        }
+      }
+    } catch (_) {}
 
     const result = {
       homeMatches:    hm,
@@ -492,23 +588,110 @@ app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
       currentEvents:  extractEvs(summary),
       homeHistEvs:    homeHist.flatMap(s => extractEvs(s)),
       awayHistEvs:    awayHist.flatMap(s => extractEvs(s)),
-      homeCornersData: analyzeCorners(homeHist, homeId),
-      awayCornersData: analyzeCorners(awayHist, awayId),
+      homeCornersData: analyzeStat(homeHist, homeId, 'wonCorners', [3, 4, 5]),
+      awayCornersData: analyzeStat(awayHist, awayId, 'wonCorners', [3, 4, 5]),
+      homeShotsData:   analyzeStat(homeHist, homeId, 'shotsOnTarget', [3, 4, 5, 6]),
+      awayShotsData:   analyzeStat(awayHist, awayId, 'shotsOnTarget', [3, 4, 5, 6]),
+      homeFoulsData:   analyzeStat(homeHist, homeId, 'foulsCommitted', [9, 11, 13]),
+      awayFoulsData:   analyzeStat(awayHist, awayId, 'foulsCommitted', [9, 11, 13]),
       homeCardsData:   analyzeCards(homeHist, homeId),
       awayCardsData:   analyzeCards(awayHist, awayId),
       injuries, marketInsight, marketOdds, matchStandings, advancedStats,
+      refereeStats,
+      rosters: summary.rosters || null,
     };
 
-    // Caché: 4h para partidos terminados, 5 min para live/upcoming
+    // Caché en memoria: 4h para terminados, 5 min para live/upcoming
     const matchState = summary.header?.competitions?.[0]?.status?.type?.state;
-    cacheSet(cacheKey, result, matchState === 'post' ? 240 : 5);
-    return res.json({ fromCache: false, data: result });
+
+    // FASE AUDITORÍA: Si el partido ya terminó, inyectamos el resultado real de mercados secundarios
+    if (matchState === 'post') {
+      const getS = (tid, name) => parseInt(summary.boxscore?.teams?.find(t => String(t.team?.id) === String(tid))?.statistics?.find(st => st.name === name)?.displayValue || 0);
+      result.matchResult = {
+        corners: getS(homeId, 'wonCorners') + getS(awayId, 'wonCorners'),
+        cards: result.currentEvents.filter(e => e.type === 'Card').length,
+        shotsOnTarget: getS(homeId, 'shotsOnTarget') + getS(awayId, 'shotsOnTarget'),
+        fouls: getS(homeId, 'foulsCommitted') + getS(awayId, 'foulsCommitted')
+      };
+      console.log(`[AUDIT] Match ${eventId} Result: Corners=${result.matchResult.corners}, Cards=${result.matchResult.cards}`);
+    }
+
+    const ttl = matchState === 'post' ? 240 : 5;
+    cacheSet(cacheKey, result, ttl);
+
+    // Persistencia en Supabase para partidos terminados o pre-partido (para guardar cuotas antes del inicio)
+    if (matchState === 'post' || matchState === 'pre') {
+      supabaseCacheSet(eventId, result, matchState === 'post' ? 720 : 2); // 30 días o 2 horas
+    }
+
+    // Recuperar cuotas pre-match si estamos en vivo y ESPN ya las ocultó
+    if (matchState === 'in' && (!result.marketOdds || !result.marketInsight)) {
+      try {
+        const { data: cached } = await supabase.from('analysis_cache').select('data').eq('fixture_id', eventId).single();
+        if (cached && cached.data) {
+          if (!result.marketOdds && cached.data.marketOdds) result.marketOdds = cached.data.marketOdds;
+          if (!result.marketInsight && cached.data.marketInsight) result.marketInsight = cached.data.marketInsight;
+        }
+      } catch (err) { /* silent fallback */ }
+    }
+
+    return { data: result, fromCache: false };
 
   } catch (err) {
-    console.error('[match/analysis]', err.message);
-    return res.status(500).json({ error: 'Error al procesar análisis del partido', details: err.message });
+    console.error('[computeMatchAnalysis]', err.message);
+    return { data: null, fromCache: false, error: err.message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENDPOINT INDIVIDUAL — Wrapper ligero sobre computeMatchAnalysis
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/espn/match/:eventId/analysis', async (req, res) => {
+  const { eventId } = req.params;
+  const refresh = req.query.refresh === 'true';
+  const { data, fromCache, error } = await computeMatchAnalysis(eventId, refresh);
+  if (error) return res.status(500).json({ error: 'Error al procesar análisis', details: error });
+  if (!data) return res.status(404).json({ error: 'Partido no encontrado' });
+  return res.json({ fromCache: !!fromCache, data });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENDPOINT BATCH — Procesa múltiples partidos en paralelo (máx 20 IDs/llamada)
+// POST /api/analysis/batch  Body: { eventIds: [id1, id2, ...] }
+// Responde: { data: { [id]: analysisData | null } }
+// Cada ID sigue: Memoria → Supabase → ESPN (solo si necesario)
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/analysis/batch', async (req, res) => {
+  const { eventIds } = req.body;
+  if (!Array.isArray(eventIds) || eventIds.length === 0) {
+    return res.status(400).json({ error: 'eventIds debe ser un array no vacío' });
+  }
+
+  const ids = [...new Set(eventIds)].slice(0, 20); // Deduplicar y limitar a 20
+  const results = {};
+  let idx = 0;
+
+  // Pool de 8 workers concurrentes internos
+  const worker = async () => {
+    while (idx < ids.length) {
+      const i = idx++;
+      const eventId = ids[i];
+      // Nota: el batch siempre intenta usar caché a menos que el engine requiera recalculación interna
+      const { data } = await computeMatchAnalysis(eventId, req.query.refresh === 'true');
+      results[eventId] = data;
+    }
+  };
+
+  try {
+    await Promise.all(Array(8).fill(null).map(() => worker()));
+    return res.json({ data: results });
+  } catch (err) {
+    console.error('[batch/analysis]', err.message);
+    return res.status(500).json({ error: 'Error en análisis batch', details: err.message });
   }
 });
+
+
 
 app.get('/api/espn/team/:id/schedule', async (req, res) => {
   try {
@@ -960,6 +1143,172 @@ app.delete('/api/picks', authenticateToken, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// VALUE BET DISCOVERIES — Guardar y consultar oportunidades detectadas
+// POST /api/value-bets          → Registrar una Value Bet al descubrirla
+// GET  /api/value-bets?date=... → Obtener las Value Bets de una jornada
+// ─────────────────────────────────────────────────────────────────────
+
+// POST /api/value-bets — Upsert: si ya existe el mismo fixture+selection, ignora el duplicate
+app.post('/api/value-bets', async (req, res) => {
+  const { fixture_id, home_team, away_team, league, market, selection, probability, odds_at_detection, argument, match_date } = req.body;
+  if (!fixture_id || !selection) {
+    return res.status(400).json({ error: 'fixture_id y selection son obligatorios' });
+  }
+  try {
+    const { data, error } = await supabase
+      .from('value_bet_discoveries')
+      .upsert(
+        { fixture_id: String(fixture_id), home_team, away_team, league, market, selection, probability, odds_at_detection, argument, match_date: match_date || new Date().toISOString().slice(0, 10), detected_at: new Date().toISOString() },
+        { onConflict: 'fixture_id,selection', ignoreDuplicates: true }
+      )
+      .select()
+      .single();
+
+    // ignoreDuplicates devuelve null en data si ya existía — lo manejamos como éxito
+    if (error) throw error;
+    return res.json({ success: true, data: data || null, isNew: !!data });
+  } catch (err) {
+    console.error('[value-bets POST]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/value-bets?date=YYYY-MM-DD — Todos los descubrimientos de una jornada
+app.get('/api/value-bets', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const { data, error } = await supabase
+      .from('value_bet_discoveries')
+      .select('*')
+      .eq('match_date', date)
+      .order('detected_at', { ascending: true });
+    if (error) throw error;
+    return res.json({ success: true, data: data || [] });
+  } catch (err) {
+    console.error('[value-bets GET]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// ESTADÍSTICAS Y AUDITORÍA
+// GET /api/stats/leagues → Retorna la efectividad real agrupada por liga y mercado
+// ─────────────────────────────────────────────────────────────────────
+app.get('/api/stats/leagues', async (req, res) => {
+  try {
+    const { date } = req.query;
+
+    // 1. Obtener todos los picks recomendados
+    let query = supabase.from('value_bet_discoveries').select('*');
+    if (date) {
+      query = query.eq('match_date', date);
+    }
+    const { data: picks, error } = await query;
+    if (error) throw error;
+    
+    if (!picks || picks.length === 0) {
+      return res.json({ success: true, data: { leagues: [], markets: [] } });
+    }
+
+    const leagueStats = {};
+    const marketStats = {};
+
+    // 2. Procesar cada pick para determinar si fue acierto
+    // Usamos Promise.all para paralelizar las llamadas a ESPN
+    await Promise.all(picks.map(async (pick) => {
+      const { fixture_id, league, market, selection } = pick;
+      
+      // Inicializar liga y mercado
+      if (!leagueStats[league]) leagueStats[league] = { total: 0, wins: 0, losses: 0, pending: 0 };
+      if (!marketStats[market]) marketStats[market] = { total: 0, wins: 0, losses: 0, pending: 0 };
+      
+      leagueStats[league].total += 1;
+      marketStats[market].total += 1;
+
+      try {
+        // Intentar obtener el resultado final del partido
+        // Podemos usar el helper getMatchSummary (está en caché si se consultó antes)
+        const summary = await getMatchSummary(fixture_id);
+        const state = summary?.header?.competitions?.[0]?.status?.type?.state;
+        
+        if (state === 'post') {
+          // Partido finalizado, evaluar resultado
+          const competitors = summary.header.competitions[0].competitors;
+          const home = competitors.find(c => c.homeAway === 'home');
+          const away = competitors.find(c => c.homeAway === 'away');
+          
+          const homeScore = parseInt(home?.score || '0');
+          const awayScore = parseInt(away?.score || '0');
+          
+          const selStr = selection.toLowerCase();
+          let won = false;
+
+          // Lógica básica de resolución (Parser de Selecciones)
+          if (selStr.includes('victoria local') || selStr.includes('local -0.5')) {
+            won = homeScore > awayScore;
+          } else if (selStr.includes('victoria visitante') || selStr.includes('visitante -0.5')) {
+            won = awayScore > homeScore;
+          } else if (selStr.includes('empate') && !selStr.includes('doble') && !selStr.includes('sin empate')) {
+             won = homeScore === awayScore;
+          } else if (selStr.includes('doble oportunidad') || selStr.includes('1x') || selStr.includes('x2')) {
+            if (selStr.includes('local')) won = homeScore >= awayScore;
+            if (selStr.includes('visitante')) won = awayScore >= homeScore;
+          } else {
+            // Si el mercado es complejo (Ej. Over de goles), por ahora lo contamos como pendiente hasta tener parser completo
+            leagueStats[league].pending += 1;
+            marketStats[market].pending += 1;
+            return;
+          }
+
+          if (won) {
+            leagueStats[league].wins += 1;
+            marketStats[market].wins += 1;
+          } else {
+            leagueStats[league].losses += 1;
+            marketStats[market].losses += 1;
+          }
+
+        } else {
+          // Aún no se juega o está en vivo
+          leagueStats[league].pending += 1;
+          marketStats[market].pending += 1;
+        }
+      } catch (err) {
+        // Falló al obtener resultado de ESPN
+        leagueStats[league].pending += 1;
+        marketStats[market].pending += 1;
+      }
+    }));
+
+    // 3. Formatear y ordenar resultados
+    const leaguesArray = Object.keys(leagueStats).map(name => {
+      const stats = leagueStats[name];
+      const finished = stats.wins + stats.losses;
+      const winRate = finished > 0 ? ((stats.wins / finished) * 100).toFixed(1) : 0;
+      return { name, total: stats.total, wins: stats.wins, losses: stats.losses, pending: stats.pending, winRate: parseFloat(winRate) };
+    });
+    
+    const marketsArray = Object.keys(marketStats).map(name => {
+      const stats = marketStats[name];
+      const finished = stats.wins + stats.losses;
+      const winRate = finished > 0 ? ((stats.wins / finished) * 100).toFixed(1) : 0;
+      return { name, total: stats.total, wins: stats.wins, losses: stats.losses, pending: stats.pending, winRate: parseFloat(winRate) };
+    });
+
+    // Ordenar por efectividad (mayor a menor) y luego por volumen (mayor a menor)
+    leaguesArray.sort((a, b) => b.winRate - a.winRate || b.wins - a.wins);
+    marketsArray.sort((a, b) => b.winRate - a.winRate || b.wins - a.wins);
+
+    return res.json({ success: true, data: { leagues: leaguesArray, markets: marketsArray } });
+
+  } catch (err) {
+    console.error('[stats/leagues]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
@@ -1014,5 +1363,46 @@ if (process.env.NODE_ENV !== 'production') {
     }, 1000); // 1s después del arranque para no bloquear el bind del puerto
   });
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// ENDPOINT ALERTAS EN VIVO — Guarda pronósticos generados durante el partido
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/live-alerts', async (req, res) => {
+  const alerts = req.body.alerts; // array of alerts
+  if (!alerts || alerts.length === 0) return res.json({ success: true, count: 0 });
+  
+  try {
+    const { data, error } = await supabase
+      .from('live_alerts')
+      .upsert(alerts, { onConflict: 'fixture_id,selection', ignoreDuplicates: true });
+      
+    if (error) throw error;
+    res.json({ success: true, count: alerts.length });
+  } catch (err) {
+    console.error('Error saving live alerts:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint para el panel admin (obtiene ultimas 50 alertas)
+app.get('/api/admin/live-alerts', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('live_alerts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    res.json({ success: true, alerts: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INICIALIZACIÓN DE TAREAS EN SEGUNDO PLANO
+// ─────────────────────────────────────────────────────────────────────────────
+const { initLiveScanner } = require('./liveScanner');
+initLiveScanner(computeMatchAnalysis);
 
 module.exports = app;
+module.exports.computeMatchAnalysis = computeMatchAnalysis;

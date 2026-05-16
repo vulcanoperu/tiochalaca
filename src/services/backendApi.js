@@ -61,6 +61,25 @@ export async function getMatchAnalysisFromBackend(eventId) {
   return backendGet(`/api/espn/match/${eventId}/analysis`);
 }
 
+// Análisis de múltiples partidos en una sola llamada HTTP (batch).
+// Timeout extendido a 120s: un batch frío de 20 partidos puede tardar 30-60s.
+// Si el batch falla por cualquier motivo, retorna ok:false para que el
+// llamador pueda caer al fallback de llamadas individuales.
+export async function getMatchAnalysisBatchFromBackend(eventIds) {
+  try {
+    const res = await backend.post(
+      '/api/analysis/batch',
+      { eventIds },
+      { timeout: 120_000 } // 120s para batch en frío
+    );
+    return { ok: true, data: res.data.data };
+  } catch (err) {
+    console.warn('[BackendAPI] Batch analysis falló, usando fallback individual:', err.message);
+    return { ok: false, data: {} };
+  }
+}
+
+
 // ─────────────────────────────────────────────────────────────────────
 // 3. FORMA RECIENTE — FotMob → Fallback api-sports (en el backend)
 //    teamName: nombre del equipo  | apiSportsId: ID numérico de api-sports
@@ -247,3 +266,43 @@ export async function clearAllDbPicks() {
     return { success: false, error: err.response?.data?.error || err.message };
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 10. VALUE BET DISCOVERIES — Guardar y recuperar oportunidades
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Guarda una Value Bet en el momento exacto en que fue detectada.
+ * El backend hace upsert con ignoreDuplicates, así que es seguro llamarlo
+ * múltiples veces para el mismo partido+selección.
+ */
+export async function saveValueBet({ fixture_id, home_team, away_team, league, market, selection, probability, odds_at_detection, argument, match_date }) {
+  try {
+    const res = await backend.post('/api/value-bets', {
+      fixture_id, home_team, away_team, league, market, selection,
+      probability, odds_at_detection, argument, match_date,
+    });
+    return { success: true, isNew: res.data.isNew, data: res.data.data };
+  } catch (err) {
+    // Fallo silencioso: no interrumpir el flujo principal si el backend no puede guardar
+    console.warn('[BackendAPI] saveValueBet falló:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Retorna todas las Value Bets guardadas para una fecha dada (YYYY-MM-DD).
+ * Útil para mostrar en la UI las oportunidades detectadas anteriormente,
+ * aunque las cuotas ya hayan cambiado.
+ */
+export async function getTodayValueBets(date) {
+  try {
+    const d = date || new Date().toLocaleDateString('sv-SE');
+    const res = await backend.get('/api/value-bets', { params: { date: d } });
+    return { success: true, data: res.data.data || [] };
+  } catch (err) {
+    console.warn('[BackendAPI] getTodayValueBets falló:', err.message);
+    return { success: false, data: [] };
+  }
+}
+

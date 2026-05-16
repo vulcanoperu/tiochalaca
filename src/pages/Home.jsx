@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Filter, Search, AlertCircle, Trophy, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RefreshCw, Filter, Search, X, AlertCircle, Trophy, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import MatchCard from '../components/MatchCard';
 import Loader from '../components/Loader';
 import PendingWall from '../components/PendingWall';
@@ -87,7 +87,20 @@ export default function Home() {
   const [leagueFilter, setLeagueFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('all');
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
   const stripRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const fetchDay = useCallback(async (dateKey, isAutoRefresh = false) => {
     let hasCache = false;
@@ -197,7 +210,7 @@ export default function Home() {
   }, []);
 
   const filtered = fixtures.filter(f => {
-    // Filtro simplificado y seguro
+    // 1. Calcular fecha local del partido
     let matchDateLocal = '';
     try {
       if (!f.fixture?.date) return false;
@@ -205,13 +218,28 @@ export default function Home() {
       matchDateLocal = localDay(d);
     } catch(e) { return false; }
 
+    // 2. Determinar si está en vivo
     const isLive = LIVE_STATUSES.includes(f.fixture?.status?.short);
-    const matchesDate = (selected === today) ? (matchDateLocal === selected || isLive) : (matchDateLocal === selected);
-    if (!matchesDate) return false;
 
+    // 3. Lógica de filtrado por fecha estricta
+    const isTodaySelected = (selected === today);
+    if (isTodaySelected) {
+      if (matchDateLocal !== selected && !isLive) return false;
+    } else {
+      if (matchDateLocal !== selected) return false;
+    }
+
+    // Parche lógico para datos corruptos del proveedor (ESPN):
+    // Es imposible que un partido programado para un día FUTURO ya esté "FINALIZADO".
+    // Si ESPN envía un partido ya jugado con una fecha de mañana, lo bloqueamos.
+    const isFinished = FINISHED_STATUSES.includes(f.fixture?.status?.short);
+    if (selected > today && isFinished) return false;
+
+    // 4. Filtros de búsqueda y liga
     const matchesLeague = leagueFilter === 'all' || String(f.league?.id) === String(leagueFilter);
     const matchesSearch = !search || [f.teams?.home?.name, f.teams?.away?.name, f.league?.name]
           .some(s => s?.toLowerCase().includes(search.toLowerCase()));
+    
     return matchesLeague && matchesSearch;
   });
 
@@ -226,7 +254,128 @@ export default function Home() {
   // Sort ALL matches chronologically for the "All" tab
   const allMatchesSorted = [...filtered].sort((a, b) => new Date(a.fixture.date) - new Date(b.fixture.date));
 
-  const presentLeagues = [...new Map((fixtures || []).map(f => [f.league?.id, f.league])).values()];
+  const presentLeagues = Array.from(
+    new Map(
+      (fixtures || [])
+        .filter(f => f.league?.id)
+        .map(f => [String(f.league.id), f.league])
+    ).values()
+  );
+
+  const LEAGUE_CONTINENT = {
+    // ★ Sudamérica
+    'per.1':                  'Sudamérica',
+    'arg.1':                  'Sudamérica',
+    'bra.1':                  'Sudamérica',
+    'bra.2':                  'Sudamérica',
+    'col.1':                  'Sudamérica',
+    'chi.1':                  'Sudamérica',
+    'uru.1':                  'Sudamérica',
+    'ecu.1':                  'Sudamérica',
+    'par.1':                  'Sudamérica',
+    'ven.1':                  'Sudamérica',
+    'bol.1':                  'Sudamérica',
+    'conmebol.libertadores':  'Internacionales',
+    'conmebol.sudamericana':  'Internacionales',
+    // ★ Norteamérica
+    'mex.1':                  'Norteamérica',
+    'usa.1':                  'Norteamérica',
+    'usa.open':               'Norteamérica',
+    'can.1':                  'Norteamérica',
+    // ★ Europa — Ligas
+    'eng.1':                  'Europa',
+    'eng.2':                  'Europa',
+    'esp.1':                  'Europa',
+    'esp.2':                  'Europa',
+    'ger.1':                  'Europa',
+    'ger.2':                  'Europa',
+    'fra.1':                  'Europa',
+    'fra.2':                  'Europa',
+    'ita.1':                  'Europa',
+    'ita.2':                  'Europa',
+    'por.1':                  'Europa',
+    'ned.1':                  'Europa',
+    'sco.1':                  'Europa',
+    'tur.1':                  'Europa',
+    'gre.1':                  'Europa',
+    'bel.1':                  'Europa',
+    'aut.1':                  'Europa',
+    'sui.1':                  'Europa',
+    'den.1':                  'Europa',
+    'nor.1':                  'Europa',
+    'swe.1':                  'Europa',
+    'pol.1':                  'Europa',
+    'rus.1':                  'Europa',
+    'ukr.1':                  'Europa',
+    'cro.1':                  'Europa',
+    'srb.1':                  'Europa',
+    'cze.1':                  'Europa',
+    // ★ Europa — Competiciones UEFA
+    'uefa.champions':         'Internacionales',
+    'uefa.europa':            'Internacionales',
+    'uefa.europa.conf':       'Internacionales',
+    '2':                      'Internacionales',
+    '3':                      'Internacionales',
+    '848':                    'Internacionales',
+    '13':                     'Internacionales',
+    '11':                     'Internacionales',
+    // ★ Asia y Oceanía
+    'ksa.1':                  'Asia y Oceanía',
+    'jpn.1':                  'Asia y Oceanía',
+    'kor.1':                  'Asia y Oceanía',
+    'chn.1':                  'Asia y Oceanía',
+    'qat.1':                  'Asia y Oceanía',
+    'uae.1':                  'Asia y Oceanía',
+    'aus.1':                  'Asia y Oceanía',
+    'ind.1':                  'Asia y Oceanía',
+    // ★ África
+    'egy.1':                  'África',
+    'mar.1':                  'África',
+    'tun.1':                  'África',
+    'alg.1':                  'África',
+    'rsa.1':                  'África',
+    'ngr.1':                  'África',
+    'sen.1':                  'África',
+  };
+
+  const getLeagueGroup = (league) => {
+    const slug = String(league.id || '').toLowerCase();
+    const name = String(league.name || '').toLowerCase();
+    
+    if (name.includes('champions') || 
+        name.includes('europa') || 
+        name.includes('conference') || 
+        name.includes('libertadores') || 
+        name.includes('sudamericana')) {
+      return 'Internacionales';
+    }
+
+    return LEAGUE_CONTINENT[slug] || 'Otras Regiones';
+  };
+
+  const groupedLeagues = presentLeagues.reduce((acc, league) => {
+    const group = getLeagueGroup(league);
+    if (!acc[group]) acc[group] = [];
+    acc[group].push(league);
+    return acc;
+  }, {});
+
+  const groupOrder = ['Internacionales', 'Sudamérica', 'Norteamérica', 'Europa', 'Asia y Oceanía', 'África'];
+  const sortedGroups = Object.keys(groupedLeagues)
+    .filter(g => g !== 'Otras Regiones')
+    .sort((a, b) => {
+    const idxA = groupOrder.indexOf(a);
+    const idxB = groupOrder.indexOf(b);
+    return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+  });
+  
+  sortedGroups.forEach(group => {
+    groupedLeagues[group].sort((a, b) => {
+      if (isPeruLeague(a)) return -1;
+      if (isPeruLeague(b)) return 1;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  });
   
   let selectedLabel = selected;
   try {
@@ -247,7 +396,7 @@ export default function Home() {
             <h1 className="text-4xl font-black tracking-tighter text-gradient-white mb-3">
               {selectedLabel}
             </h1>
-            <div className="flex items-center gap-6 text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">
+            <div className="flex items-center gap-6 text-xs font-black uppercase tracking-[0.2em] text-slate-500">
               <span className="flex items-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
                 {fixtures.length} Partidos
@@ -261,16 +410,141 @@ export default function Home() {
               {lastUpdated && <span className="opacity-40">Act. {lastUpdated.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}</span>}
             </div>
           </div>
-          <button 
-            onClick={() => fetchDay(selected)} 
-            disabled={loading} 
-            className="group/refresh flex items-center gap-3 px-4 py-2 rounded-full bg-white text-black hover:bg-slate-200 hover:scale-105 transition-all duration-300 relative z-10 shadow-[0_0_20px_rgba(255,255,255,0.15)]"
-          >
-            <div className={`flex items-center justify-center w-7 h-7 rounded-full bg-black/10 ${loading ? 'animate-spin' : 'group-hover/refresh:bg-black/20 group-hover/refresh:rotate-180 transition-all duration-500'}`}>
-              <RefreshCw size={12} strokeWidth={2.5} />
+          <div className="flex items-center gap-3 relative z-20">
+
+            {/* ── Search ── */}
+            <div className="relative group">
+              <Search
+                size={13}
+                className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-[#BFF102] transition-all duration-300"
+              />
+              <input
+                 value={search}
+                 onChange={e => setSearch(e.target.value)}
+                 placeholder="Buscar equipo o liga..."
+                 className="
+                  h-9 pl-10 pr-4 rounded-full text-[13px] font-medium
+                  bg-white/5 backdrop-blur-md
+                  border border-white/8
+                  text-slate-300 placeholder-slate-600
+                  focus:outline-none focus:bg-white/10
+                  focus:border-[#72BF01]/50
+                  focus:shadow-[0_0_0_3px_rgba(114,191,1,0.12)]
+                  w-44 focus:w-64
+                  transition-all duration-400 ease-in-out
+                "
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-300 transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
-            <span className="text-[10px] font-black uppercase tracking-widest pr-2">Actualizar</span>
-          </button>
+
+            {/* ── League Dropdown ── */}
+            <div className="relative" ref={dropdownRef}>
+              {/* Trigger */}
+              <button
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className={`
+                  h-9 w-44 flex items-center justify-between pl-4 pr-3 rounded-full text-[13px] font-semibold
+                  border transition-all duration-300 cursor-pointer
+                  ${isDropdownOpen
+                    ? 'bg-[#72BF01]/15 border-[#72BF01]/40 text-[#BFF102]'
+                    : 'bg-white/5 border-white/8 text-slate-400 hover:bg-white/8 hover:border-white/15 hover:text-slate-200'}
+                `}
+              >
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <Filter size={14} className="shrink-0" />
+                  <span className="truncate">
+                  {leagueFilter === 'all'
+                    ? 'Todas las ligas'
+                    : presentLeagues.find(l => l?.id === leagueFilter)?.name
+                        ?.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+                    || 'Todas las ligas'}
+                </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {leagueFilter !== 'all' && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#BFF102]" />
+                  )}
+                <ChevronDown
+                  size={14}
+                  className={`shrink-0 transition-transform duration-300 ${isDropdownOpen ? 'rotate-180' : ''}`}
+                />
+                </div>
+              </button>
+
+              {/* Panel */}
+              {isDropdownOpen && (
+                <div className="
+                  absolute z-50 right-0 top-full mt-2 w-72
+                  bg-[#071f13] border border-white/[0.07] rounded-2xl
+                  shadow-[0_24px_60px_rgba(0,0,0,0.6)]
+                  overflow-hidden
+                  animate-in fade-in slide-in-from-top-2 duration-200
+                ">
+                  {/* Panel header */}
+                  <div className="px-5 py-3.5 border-b border-white/5 flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">Liga</span>
+                    {leagueFilter !== 'all' && (
+                      <button
+                        onClick={() => { setLeagueFilter('all'); setIsDropdownOpen(false); }}
+                        className="text-[10px] text-[#72BF01] hover:text-[#BFF102] font-semibold transition-colors"
+                      >
+                        Limpiar
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Scrollable list */}
+                  <div className="max-h-[65vh] overflow-y-auto py-2">
+                    {/* All option */}
+                    <button
+                      onClick={() => { setLeagueFilter('all'); setIsDropdownOpen(false); }}
+                      className={`w-full flex items-center justify-between px-5 py-2.5 text-[17px] transition-all duration-150 ${
+                        leagueFilter === 'all'
+                          ? 'text-[#BFF102] font-bold bg-[#BFF102]/8'
+                          : 'text-slate-300 hover:text-white hover:bg-white/4'
+                      }`}
+                    >
+                      <span className="font-semibold">Todas las ligas</span>
+                      {leagueFilter === 'all' && <div className="w-2 h-2 rounded-full bg-[#BFF102]" />}
+                    </button>
+
+                    {/* Grouped leagues */}
+                    {sortedGroups.map(group => (
+                      <div key={group} className="mt-7">
+                        <div className="mx-3 mb-0.5 mt-1 px-3 py-2 flex items-center gap-2.5 rounded-lg bg-white/[0.03] border-l-2 border-[#72BF01]/60">
+                          <span className="text-[12px] font-black uppercase tracking-[0.3em] text-[#72BF01]/80">{group}</span>
+                        </div>
+                        {groupedLeagues[group].map(l => (
+                          <button
+                            key={l?.id}
+                            onClick={() => { setLeagueFilter(l?.id); setIsDropdownOpen(false); }}
+                            className={`w-full flex items-center justify-between pl-12 pr-5 py-0.5 text-[17px] transition-all duration-150 ${
+                              leagueFilter === l?.id
+                                ? 'text-[#BFF102] font-bold bg-[#BFF102]/8'
+                                : 'text-slate-300 hover:text-white hover:bg-white/4'
+                            }`}
+                          >
+                            <span className="truncate font-medium">
+                              {l?.name?.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                            </span>
+                            {leagueFilter === l?.id && <div className="w-2 h-2 rounded-full bg-[#BFF102] shrink-0" />}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+          </div>
         </div>
       </div>
 
@@ -288,41 +562,17 @@ export default function Home() {
                 onClick={() => setSelected(key)}
                 className={`flex flex-col items-center min-w-[72px] py-5 rounded-lg border transition-all duration-300 ${
                   isSelected 
-                    ? 'bg-white border-white text-black scale-105 shadow-2xl' 
+                    ? 'bg-[#BFF102] border-[#BFF102] text-[#00312D] scale-105 shadow-2xl' 
                     : isToday 
                       ? 'bg-accent-green/5 border-accent-green/20 text-accent-green hover:bg-accent-green/10'
-                      : 'bg-white/[0.02] border-white/10 text-slate-500 hover:border-white/25 hover:text-white'
+                      : 'bg-[#3A7817] border-transparent text-[#EAFDE7]/50 hover:border-[#EAFDE7]/20 hover:text-[#EAFDE7]'
                 }`}
               >
-                <span className={`text-[10px] font-black uppercase tracking-widest mb-2 ${isSelected ? 'opacity-60' : ''}`}>{dayName}</span>
+                <span className={`text-[10px] font-bold mb-2 ${isSelected ? 'opacity-60' : ''}`}>{dayName.charAt(0) + dayName.slice(1).toLowerCase()}</span>
                 <span className="text-xl font-black leading-none">{dayNum}</span>
               </button>
             );
           })}
-        </div>
-      </div>
-
-      {/* ── Filters & Search ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-16 items-center">
-        <div className="lg:col-span-7 relative">
-          <Search size={16} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-600" />
-          <input 
-            type="text" 
-            value={search} 
-            onChange={e => setSearch(e.target.value)} 
-            placeholder="BUSCAR EQUIPO O LIGA..." 
-            className="input-field pl-14 py-4 uppercase font-bold tracking-widest text-xs border-white/10 bg-white/[0.02]" 
-          />
-        </div>
-        <div className="lg:col-span-5 flex gap-4">
-          <select 
-            value={leagueFilter} 
-            onChange={e => setLeagueFilter(e.target.value)} 
-            className="input-field flex-1 py-4 font-bold uppercase tracking-widest text-xs cursor-pointer border-white/10 bg-white/[0.02]"
-          >
-            <option value="all">TODAS LAS LIGAS</option>
-            {presentLeagues.map(l => <option key={l?.id} value={l?.id}>{l?.name?.toUpperCase()}</option>)}
-          </select>
         </div>
       </div>
 
@@ -356,9 +606,31 @@ export default function Home() {
       {loading ? <Loader /> : (
         <div className="space-y-24">
           {activeTab === 'all' ? (
-            allMatchesSorted.length > 0 && (
-              <Section title="Todos los Partidos" groups={groupAndSortLeagues(allMatchesSorted)} />
-            )
+            <>
+              {/* En Vivo primero — si hay partidos en curso */}
+              {liveMatches.length > 0 && (
+                <Section title="En Vivo" groups={groupAndSortLeagues(liveMatches)} accent="green" />
+              )}
+
+              {/* Próximos — siempre presentes si existen */}
+              {upcomingMatches.length > 0 && (
+                <Section
+                  title="Próximos Encuentros"
+                  groups={groupAndSortLeagues(upcomingMatches)}
+                  accent="blue"
+                />
+              )}
+
+              {/* Finalizados al final */}
+              {finishedMatches.length > 0 && (
+                <Section title="Resultados Recientes" groups={groupAndSortLeagues(finishedMatches)} />
+              )}
+
+              {/* Sin partidos en absoluto */}
+              {liveMatches.length === 0 && upcomingMatches.length === 0 && finishedMatches.length === 0 && filtered.length > 0 && (
+                <Section title="Todos los Partidos" groups={groupAndSortLeagues(filtered)} />
+              )}
+            </>
           ) : (
             <>
               {activeTab === 'live' && liveMatches.length > 0 && (
@@ -400,7 +672,7 @@ function Section({ title, groups, accent }) {
     <div className={`relative ${accent === 'green' ? 'glow-soft-green' : accent === 'blue' ? 'glow-soft-blue' : ''}`}>
       <div className="flex items-center gap-6 mb-10">
         <div className={`w-2 h-2 rounded-full ${dotClass}`} />
-        <h2 className={`text-sm font-black uppercase tracking-[0.4em] ${accentClass}`}>{title}</h2>
+        <h2 className={`text-base font-bold ${accentClass}`}>{title}</h2>
         <div className="flex-1 h-px bg-white/[0.05]" />
       </div>
       <div className="space-y-16">
@@ -411,7 +683,7 @@ function Section({ title, groups, accent }) {
               <span className="text-[11px] font-black uppercase tracking-widest text-slate-400">{league?.name}</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {matches.map(f => <MatchCard key={f.fixture?.id} fixture={f} />)}
+              {matches.map(f => <MatchCard key={f.fixture?.id} fixture={f} hideLeague={true} />)}
             </div>
           </div>
         ))}

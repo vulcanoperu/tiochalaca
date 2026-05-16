@@ -100,120 +100,173 @@ export default function SettingsPage() {
 
           {/* TAB: PERSONALIZACIÓN */}
           {activeTab === 'interface' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+            <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
               <div className="border-b border-white/5 pb-4">
                 <h2 className="text-lg font-bold text-white">Personalización</h2>
-                <p className="text-xs text-slate-400 mt-1">Adapta la interfaz visual a tus necesidades.</p>
+                <p className="text-xs text-slate-400 mt-1">Adapta la interfaz visual a tus preferencias.</p>
               </div>
-              <div className="space-y-5">
-                {/* Selector de Tema */}
-                <div className="p-4 border border-white/5 rounded-xl bg-white/[0.02]">
-                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-                    <Layout size={16} className="text-accent-blue" />
-                    Estilo Visual (Tema)
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {[
-                      { id: 'standard', name: 'Estándar', desc: 'Negro Profundo (Actual)', color: 'bg-[#030507]' },
-                      { id: 'dark', name: 'Oscuro', desc: 'Azul Pizarra Suave', color: 'bg-slate-900' },
-                      { id: 'light', name: 'Claro', desc: 'Blanco y Limpio', color: 'bg-slate-100' }
-                    ].map(t => (
+
+              {/* ── Selector de Tema ── */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 mb-4">
+                  <Layout size={14} className="text-[#BFF102]" />
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Estilo Visual</h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    {
+                      id: 'standard',
+                      name: 'Clásico',
+                      desc: 'Verde Estadio',
+                      preview: [
+                        { bg: '#00312D', label: 'Base' },
+                        { bg: '#3A7817', label: 'Surface' },
+                        { bg: '#72BF01', label: 'Acento' },
+                        { bg: '#BFF102', label: 'Highlight' },
+                      ]
+                    },
+                    {
+                      id: 'dark',
+                      name: 'Oscuro',
+                      desc: 'Negro Profundo',
+                      preview: [
+                        { bg: '#030507', label: 'Base' },
+                        { bg: '#0d1117', label: 'Surface' },
+                        { bg: '#1e2a3a', label: 'Acento' },
+                        { bg: '#4a9eff', label: 'Highlight' },
+                      ]
+                    },
+                    {
+                      id: 'light',
+                      name: 'Claro',
+                      desc: 'Blanco Limpio',
+                      preview: [
+                        { bg: '#ffffff', label: 'Base' },
+                        { bg: '#f1f5f9', label: 'Surface' },
+                        { bg: '#e2e8f0', label: 'Acento' },
+                        { bg: '#3b82f6', label: 'Highlight' },
+                      ]
+                    },
+                  ].map(t => {
+                    const isActive = theme === t.id;
+                    return (
                       <button
                         key={t.id}
                         onClick={() => setTheme(t.id)}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          theme === t.id 
-                            ? 'border-accent-blue bg-accent-blue/10' 
-                            : 'border-white/10 hover:border-white/20'
+                        className={`relative p-4 rounded-xl border text-left transition-all duration-200 overflow-hidden group ${
+                          isActive
+                            ? 'border-[#BFF102]/60 bg-[#BFF102]/5'
+                            : 'border-white/[0.07] bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]'
                         }`}
                       >
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className={`w-4 h-4 rounded-full border border-black/20 shadow-inner ${t.color}`} />
-                          <span className={`text-sm font-bold ${theme === t.id ? 'text-accent-blue' : 'text-slate-200'}`}>{t.name}</span>
-                          {theme === t.id && <Check size={14} className="text-accent-blue ml-auto" />}
+                        {/* Color palette preview strip */}
+                        <div className="flex gap-1 mb-3 rounded-md overflow-hidden h-8">
+                          {t.preview.map(swatch => (
+                            <div
+                              key={swatch.label}
+                              className="flex-1 rounded"
+                              style={{ backgroundColor: swatch.bg }}
+                              title={swatch.label}
+                            />
+                          ))}
                         </div>
-                        <p className="text-[10px] text-slate-400">{t.desc}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
 
-                {/* Selector de Tipografía */}
-                <div className="p-4 border border-white/5 rounded-xl bg-white/[0.02]">
-                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-                    <span className="text-accent-blue font-serif italic text-lg leading-none">T</span>
-                    Tipografía (Fuente)
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {[
-                      { id: 'outfit', name: 'Outfit', desc: 'Moderna y Limpia (Actual)' },
-                      { id: 'jakarta', name: 'Plus Jakarta Sans', desc: 'Elegante y Dinámica' },
-                      { id: 'inter', name: 'Inter', desc: 'Estilo Técnico' },
-                      { id: 'roboto', name: 'Roboto', desc: 'Máxima Legibilidad' }
-                    ].map(f => (
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className={`text-sm font-bold ${isActive ? 'text-[#BFF102]' : 'text-slate-200'}`}>
+                              {t.name}
+                            </p>
+                            <p className="text-[10px] text-slate-500 mt-0.5">{t.desc}</p>
+                          </div>
+                          {isActive && (
+                            <span className="flex items-center justify-center w-5 h-5 rounded-full bg-[#BFF102] shrink-0">
+                              <Check size={11} className="text-[#00312D]" strokeWidth={3} />
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ── Selector de Tipografía ── */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="text-[#BFF102] font-serif italic text-base leading-none">T</span>
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Tipografía</h3>
+                </div>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  {[
+                    { id: 'outfit',  name: 'Outfit',           desc: 'Moderna' },
+                    { id: 'jakarta', name: 'Plus Jakarta Sans', desc: 'Elegante' },
+                    { id: 'inter',   name: 'Inter',            desc: 'Técnica' },
+                    { id: 'roboto',  name: 'Roboto',           desc: 'Legible' },
+                  ].map(f => {
+                    const isActive = font === f.id;
+                    return (
                       <button
                         key={f.id}
                         onClick={() => setFont(f.id)}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          font === f.id 
-                            ? 'border-accent-blue bg-accent-blue/10' 
-                            : 'border-white/10 hover:border-white/20'
+                        className={`p-4 rounded-xl border text-left transition-all duration-200 ${
+                          isActive
+                            ? 'border-[#BFF102]/60 bg-[#BFF102]/5'
+                            : 'border-white/[0.07] bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]'
                         }`}
                       >
-                        <div className="flex items-center gap-3 mb-1">
-                          <span className={`text-xl font-bold ${font === f.id ? 'text-accent-blue' : 'text-slate-200'}`} style={{ fontFamily: f.name }}>Aa</span>
-                          {font === f.id && <Check size={14} className="text-accent-blue ml-auto" />}
+                        <div className="flex items-center justify-between mb-2">
+                          <span
+                            className={`text-2xl font-bold leading-none ${isActive ? 'text-[#BFF102]' : 'text-slate-300'}`}
+                            style={{ fontFamily: f.name }}
+                          >Aa</span>
+                          {isActive && (
+                            <span className="flex items-center justify-center w-4 h-4 rounded-full bg-[#BFF102] shrink-0">
+                              <Check size={9} className="text-[#00312D]" strokeWidth={3} />
+                            </span>
+                          )}
                         </div>
-                        <p className="text-sm font-bold text-white mt-1" style={{ fontFamily: f.name }}>{f.name}</p>
-                        <p className="text-[10px] text-slate-400 mt-1">{f.desc}</p>
+                        <p className="text-xs font-semibold text-slate-200 mt-1 truncate" style={{ fontFamily: f.name }}>{f.name}</p>
+                        <p className="text-[10px] text-slate-600 mt-0.5">{f.desc}</p>
                       </button>
-                    ))}
-                  </div>
+                    );
+                  })}
                 </div>
+              </div>
 
-                {/* Selector de Tamaño de Texto */}
-                <div className="p-4 border border-white/5 rounded-xl bg-white/[0.02]">
-                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-                    <span className="text-accent-blue font-serif italic text-lg leading-none">A</span>
-                    Tamaño de Texto
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {[
-                      { id: 'small', name: 'Pequeño', desc: 'Más densidad de datos' },
-                      { id: 'medium', name: 'Mediano', desc: 'Equilibrado (Actual)' },
-                      { id: 'large', name: 'Grande', desc: 'Máxima legibilidad' },
-                      { id: 'xlarge', name: 'Extra', desc: 'Accesibilidad Total' }
-                    ].map(ts => (
+              {/* ── Tamaño de Texto ── */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="text-[#BFF102] font-bold text-base leading-none">A</span>
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Tamaño de Texto</h3>
+                </div>
+                <div className="flex gap-3">
+                  {[
+                    { id: 'small',  label: 'A',  name: 'Pequeño',  size: 'text-sm'  },
+                    { id: 'medium', label: 'A',  name: 'Mediano',  size: 'text-base' },
+                    { id: 'large',  label: 'A',  name: 'Grande',   size: 'text-xl'  },
+                    { id: 'xlarge', label: 'A',  name: 'Extra',    size: 'text-2xl' },
+                  ].map(ts => {
+                    const isActive = textSize === ts.id;
+                    return (
                       <button
                         key={ts.id}
                         onClick={() => setTextSize(ts.id)}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          textSize === ts.id 
-                            ? 'border-accent-blue bg-accent-blue/10' 
-                            : 'border-white/10 hover:border-white/20'
+                        className={`flex-1 py-4 px-2 rounded-xl border text-center transition-all duration-200 ${
+                          isActive
+                            ? 'border-[#BFF102]/60 bg-[#BFF102]/5'
+                            : 'border-white/[0.07] bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.04]'
                         }`}
                       >
-                        <div className="flex items-center gap-3 mb-1">
-                          <span className={`font-bold ${textSize === ts.id ? 'text-accent-blue' : 'text-slate-200'} ${ts.id === 'small' ? 'text-sm' : ts.id === 'medium' ? 'text-base' : ts.id === 'large' ? 'text-lg' : 'text-xl'}`}>Aa</span>
-                          {textSize === ts.id && <Check size={14} className="text-accent-blue ml-auto" />}
-                        </div>
-                        <p className="text-sm font-bold text-white mt-1">{ts.name}</p>
-                        <p className="text-[10px] text-slate-400 mt-1">{ts.desc}</p>
+                        <span className={`block font-bold ${ts.size} ${isActive ? 'text-[#BFF102]' : 'text-slate-400'} leading-none mb-2`}>
+                          {ts.label}
+                        </span>
+                        <span className="text-[10px] text-slate-600">{ts.name}</span>
                       </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
-                  [Selector de Ligas Favoritas Pinceladas]
-                </div>
-                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
-                  [Ajuste de Zona Horaria Manual / Automática]
-                </div>
-                <div className="p-4 border border-dashed border-white/10 rounded-xl flex items-center justify-center text-slate-500 text-sm">
-                  [Toggle para ocultar/mostrar Stats Avanzadas]
+                    );
+                  })}
                 </div>
               </div>
+
             </div>
           )}
 

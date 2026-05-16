@@ -22,9 +22,9 @@ function CardBadge({ color = 'red', count = 1 }) {
 function StatusBadge({ status, elapsed }) {
   if (['1H', '2H', 'ET'].includes(status)) {
     return (
-      <span className="badge-red gap-2 shadow-[0_0_15px_rgba(255,71,87,0.15)]">
+      <span className="badge-red gap-2 shadow-[0_0_15px_rgba(255,71,87,0.15)] px-3 py-1.5">
         <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-        <span className="font-numbers tracking-tight">{elapsed}'</span>
+        <span className="font-numbers tracking-tight text-xs">{elapsed}'</span>
       </span>
     );
   }
@@ -34,7 +34,7 @@ function StatusBadge({ status, elapsed }) {
 }
 
 // ── MatchCard Principal (Con Respiro y Color) ──────────────────────────────────
-export default function MatchCard({ fixture, onClick }) {
+export default function MatchCard({ fixture, onClick, hideLeague = false }) {
   const navigate = useNavigate();
   const { fixture: f, teams, goals, league } = fixture;
   const status = f?.status?.short;
@@ -55,7 +55,7 @@ export default function MatchCard({ fixture, onClick }) {
   const showScore = isLive || isFinished;
 
   // Acento lateral basado en estado
-  const accentClass = isLive ? 'bg-accent-green' : isFinished ? 'bg-slate-700' : 'bg-accent-blue';
+  const accentClass = isLive ? 'bg-accent-green' : isFinished ? 'bg-slate-700' : 'bg-accent-green';
 
   const formatTeamName = (name) => {
     if (!name) return '';
@@ -66,19 +66,21 @@ export default function MatchCard({ fixture, onClick }) {
     <button
       onClick={handleClick}
       id={`match-${f?.id}`}
-      className="group relative w-full text-left bg-[#0a0f14] border border-white/[0.06] rounded-2xl transition-all duration-500 hover:border-white/20 hover:bg-[#0d131a] hover:scale-[1.02] hover:shadow-2xl overflow-hidden"
+      className="group relative w-full text-left glass-card-light-hover rounded-2xl transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl overflow-hidden"
     >
       <div className="p-6 md:p-8">
         {/* Header: Liga + Hora/Estado */}
         <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-3 opacity-40 group-hover:opacity-100 transition-opacity">
-            {league?.logo && (
-              <img src={league.logo} alt="" className="w-4 h-4 object-contain grayscale brightness-200" />
-            )}
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] truncate max-w-[140px]">
-              {league?.name}
-            </span>
-          </div>
+          {!hideLeague ? (
+            <div className="flex items-center gap-3 opacity-40 group-hover:opacity-100 transition-opacity">
+              {league?.logo && (
+                <img src={league.logo} alt="" className="w-4 h-4 object-contain grayscale brightness-200" />
+              )}
+              <span className="text-[11px] font-bold truncate max-w-[140px]">
+                {league?.name}
+              </span>
+            </div>
+          ) : <div />}
 
           <div className="shrink-0">
             {isLive ? (
@@ -86,7 +88,7 @@ export default function MatchCard({ fixture, onClick }) {
             ) : isFinished ? (
               <StatusBadge status="FT" />
             ) : (
-              <div className="flex items-center gap-2 text-accent-blue font-numbers font-bold text-xs bg-accent-blue/5 px-3 py-1 rounded-full border border-accent-blue/10">
+              <div className="flex items-center gap-2 text-accent-green font-numbers font-bold text-[15px]">
                 {kickoff}
               </div>
             )}
@@ -105,7 +107,7 @@ export default function MatchCard({ fixture, onClick }) {
                 <span className="text-sm font-black text-slate-700">{teams?.home?.name?.[0]}</span>
               )}
             </div>
-            <span className="text-[15px] font-black tracking-tight text-slate-200 flex-1 break-words leading-tight">
+            <span className="text-[17px] font-black tracking-tight text-slate-200 flex-1 break-words leading-tight">
               {formatTeamName(teams?.home?.name)}
             </span>
             {showScore && (
@@ -124,7 +126,7 @@ export default function MatchCard({ fixture, onClick }) {
                 <span className="text-sm font-black text-slate-700">{teams?.away?.name?.[0]}</span>
               )}
             </div>
-            <span className="text-[15px] font-black tracking-tight text-slate-200 flex-1 break-words leading-tight">
+            <span className="text-[17px] font-black tracking-tight text-slate-200 flex-1 break-words leading-tight">
               {formatTeamName(teams?.away?.name)}
             </span>
             {showScore && (
@@ -149,14 +151,11 @@ export default function MatchCard({ fixture, onClick }) {
         )}
 
         {/* CTA sutil que aparece en hover */}
-        <div className="mt-5 pt-4 border-t border-white/[0.03] flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-500">
-           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
-             Ver Detalles
-           </span>
-           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-accent-green flex items-center gap-1">
-             <Activity size={12} />
-             Analizar
-             <ChevronRight size={12} />
+        <div className="mt-5 pt-4 border-t border-white/[0.03] flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+           <span className="text-[13px] font-bold text-accent-green flex items-center gap-1">
+             <Activity size={14} />
+             Ver detalles
+             <ChevronRight size={14} />
            </span>
         </div>
       </div>

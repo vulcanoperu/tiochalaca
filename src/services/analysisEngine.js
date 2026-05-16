@@ -1,6 +1,7 @@
+import { calcCombinedProbs, calcPythagoreanExpectation, calcVolatilityIndex } from './eloRating.js';
 // ─────────────────────────────────────────────────────────────────
 //  analysisEngine.js
-//  Motor de análisis tipster profesional
+//  Motor de análisis tipster profesional — v4 (Elo + Dixon-Coles)
 //  Fuente de datos: ESPN (gratuito, sin API keys)
 // ─────────────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ export function calculateFormScore(matches, teamId, side = null) {
   if (pool.length === 0) return { score: 0, label: 'Sin datos', wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, total: 0 };
 
   let wins = 0, draws = 0, losses = 0, goalsFor = 0, goalsAgainst = 0;
-  const weights = [3, 3, 2, 2, 1, 1, 1, 1, 1, 1];
+  const weights = [4, 4, 3, 3, 2, 1, 1, 1, 1, 1, 1, 1]; // 70% peso a los últimos 5 partidos (Recency Extrema)
 
   let weightedScore = 0;
   let totalWeight = 0;
@@ -237,7 +238,11 @@ export function isDerbyMatch(home, away) {
     ['nacional', 'peñarol'],
     ['colo colo', 'universidad de chile'],
     ['millonarios', 'santa fe'],
-    ['nacional', 'medellín']
+    ['nacional', 'medellín'],
+    ['al nassr', 'al hilal'],
+    ['al-nassr', 'al-hilal'],
+    ['al ittihad', 'al ahli'],
+    ['al-ittihad', 'al-ahli']
   ];
 
   return derbies.some(pair => {
@@ -269,7 +274,23 @@ export function isDerbyMatch(home, away) {
 // --- NUEVOS FACTORES DE PREVENCIÓN ---
 const ALTITUDE_CITIES = [
   'la paz', 'quito', 'cusco', 'bogota', 'bogotá', 'arequipa', 'potosi', 'potosí', 
-  'oruro', 'el alto', 'huancayo', 'cajamarca', 'latacunga', 'riobamba', 'ambato'
+  'oruro', 'el alto', 'huancayo', 'cajamarca', 'latacunga', 'riobamba', 'ambato',
+  // Ciudades de altura específicas del Perú
+  'juliaca', 'puno', 'cerro de pasco', 'ayacucho', 'abancay', 'andahuaylazo', 'huaraz'
+];
+
+// Equipos peruanos de costa/llano (sufren el factor altitud)
+const PERU_COASTAL_TEAMS = [
+  'alianza lima', 'universitario', 'sporting cristal', 'sport boys',
+  'cesar vallejo', 'mannucci', 'grau', 'atlético grau', 'alianza atletico', 
+  'unión comercio'
+];
+
+// Equipos peruanos que juegan habitualmente en altura
+const PERU_HIGHLAND_TEAMS = [
+  'huancayo', 'sport huancayo', 'comerciantes unidos', 'cienciano', 
+  'cusco fc', 'deportivo garcilaso', 'garcilaso', 'FBC melgar', 'melgar', 
+  'ayacucho', 'utc', 'adt', 'los chankas', 'chankas'
 ];
 
 const HIERARCHY_TEAMS = [
@@ -292,11 +313,127 @@ function checkCalendarFatigue(history) {
   return recentMatches.length >= 3;
 }
 
-function checkAltitudeRisk(teamName, city) {
-  if (!city) return false;
-  const isAltitudeCity = ALTITUDE_CITIES.some(c => city.toLowerCase().includes(c));
-  const isHierarchyTeam = HIERARCHY_TEAMS.some(t => teamName.toLowerCase().includes(t));
-  return isAltitudeCity && isHierarchyTeam;
+/**
+ * AJUSTE #1: "Resaca Internacional"
+ * Equipos que jugaron competiciones internacionales hace <=4 días sufren una
+ * penalización extra de forma porque suelen rotar jugadores o regresan con fatiga.
+ */
+function checkInternationalHangover(teamName, history) {
+  if (!history || history.length === 0) return { penalty: 0, note: '' };
+
+  const now = new Date();
+  // Detectar si el último partido fue en Copa Internacional
+  // Incluye: Libertadores, Sudamericana, Champions, Europa, Conference, AFC Champions League
+  const intlMatch = history.find(m => {
+    const lg = (m.league?.name || m._league || '').toLowerCase();
+    const isIntl = lg.includes('libertadores') || lg.includes('sudamericana') ||
+                   lg.includes('champions') || lg.includes('europa') ||
+                   lg.includes('conference') ||
+                   lg.includes('afc') || lg.includes('asian') || lg.includes('asia');
+    if (!isIntl) return false;
+    const matchDate = new Date(m.fixture?.date || m.date);
+    const diffDays = (now - matchDate) / 86400000;
+    return diffDays >= 0 && diffDays <= 4; // Jugó copa hace <=4 días
+  });
+
+  if (intlMatch) {
+    const daysAgo = Math.round((now - new Date(intlMatch.fixture?.date || intlMatch.date)) / 86400000);
+    return {
+      penalty: daysAgo <= 2 ? 22 : 15, // Penalización máxima y severa por rotaciones/fatiga
+      note: `⚠️ Resaca internacional (${daysAgo}d desde Copa)`
+    };
+  }
+  return { penalty: 0, note: '' };
+}
+
+/**
+ * AJUSTE ACL (Saudi Big 4): "Congestión de Copa Asiática"
+ * Los 4 Grandes saudíes (Hilal, Nassr, Ahli, Ittihad) rotan plantilla
+ * cuando tienen partidos de AFC Champions League Elite en ventanas de 7 días.
+ * Si el historial muestra una copa asiática reciente (<=7 días), el equipo
+ * no aliniará su once titular → los picks de Ganador/Hándicap no son fiables.
+ *
+ * @returns {{ isAtRisk: boolean, note: string }}
+ */
+const SAUDI_BIG4_NAMES = ['al-hilal', 'al hilal', 'al-nassr', 'al nassr', 'al-ahli', 'al ahli', 'al-ittihad', 'al ittihad'];
+
+function checkACLCongestion(teamName, history) {
+  const teamLow = (teamName || '').toLowerCase();
+  const isBig4 = SAUDI_BIG4_NAMES.some(t => teamLow.includes(t));
+  if (!isBig4) return { isAtRisk: false, note: '' };
+  if (!history || history.length === 0) return { isAtRisk: false, note: '' };
+
+  const now = new Date();
+  const recentACL = history.find(m => {
+    const lg = (m.league?.name || m._league || '').toLowerCase();
+    const isACL = lg.includes('afc') || lg.includes('asian') || lg.includes('champions');
+    if (!isACL) return false;
+    const matchDate = new Date(m.fixture?.date || m.date);
+    const diffDays = (now - matchDate) / 86400000;
+    return diffDays >= 0 && diffDays <= 7; // Copa asiática en los últimos 7 días
+  });
+
+  if (recentACL) {
+    const daysAgo = Math.round((now - new Date(recentACL.fixture?.date || recentACL.date)) / 86400000);
+    return {
+      isAtRisk: true,
+      note: `⚠️ ACL Congestion: ${teamName} jugó copa asiática hace ${daysAgo}d. Rotación probable.`
+    };
+  }
+  return { isAtRisk: false, note: '' };
+}
+
+/**
+ * AJUSTE #2: Verificación de "Portería Perforada Reciente" para filtro Sniper.
+ * Un equipo NO califica como Sniper Elite (favorito de casa) si ha
+ * concedido goles en sus últimos 3 partidos de local.
+ * Retorna true si la defensa local está en forma (apta para Sniper).
+ */
+function checkSniperCleanSheetGuard(homeFormAtHome, homeTeamId, homeHistory) {
+  // Necesitamos al menos 3 partidos en casa recientes
+  if (!homeFormAtHome || homeFormAtHome.total < 3) return true; // Sin datos = no bloqueamos
+  if (!homeHistory || homeHistory.length === 0) return true;
+
+  // Filtrar solo partidos de local (los últimos 3)
+  const recentHome = homeHistory
+    .filter(m => String(m.teams?.home?.id) === String(homeTeamId))
+    .slice(0, 3);
+
+  if (recentHome.length < 3) return true; // No hay suficientes datos locales
+
+  // Si concedió goles en TODOS los últimos 3 de casa → defensa porosa → bloquear Sniper
+  const allConceded = recentHome.every(m => (m.goals?.away ?? 0) > 0);
+  return !allConceded; // true = defensa OK (Sniper habilitado), false = defensa porosa (bloqueado)
+}
+
+/**
+ * Evalúa el riesgo de altitud con inteligencia peruana:
+ * - 'high':   equipo costeño viaja a altura (penalización máxima)
+ * - 'medium': equipo de jerarquía foráneo visita ciudad de altura
+ * - null:     dos equipos de altura o partido sin riesgo
+ */
+function checkAltitudeRisk(teamName, city, homeTeamName = '') {
+  if (!city) return null;
+  const cityLow = city.toLowerCase();
+  const teamLow = teamName.toLowerCase();
+  const homeLow = homeTeamName.toLowerCase();
+
+  const isAltitudeCity = ALTITUDE_CITIES.some(c => cityLow.includes(c));
+  if (!isAltitudeCity) return null;
+
+  // Si el local también es equipo de altura, no hay ventaja (se anulan)
+  const isHomeHighland = PERU_HIGHLAND_TEAMS.some(t => homeLow.includes(t));
+  if (isHomeHighland) return null;
+
+  // Si el visitante es un equipo costero peruano → penalización alta
+  const isAwayCoastal = PERU_COASTAL_TEAMS.some(t => teamLow.includes(t));
+  if (isAwayCoastal) return 'high';
+
+  // Si el visitante es un equipo de jerarquía foráneo → penalización media
+  const isHierarchyTeam = HIERARCHY_TEAMS.some(t => teamLow.includes(t));
+  if (isHierarchyTeam) return 'medium';
+
+  return null;
 }
 export function generatePicks({
   homeStats, awayStats, h2hData, homeForm, awayForm,
@@ -304,6 +441,8 @@ export function generatePicks({
   isLive, liveClock, liveHomeGoals, liveAwayGoals,
   marketInsight,          // Cuotas/predicción del PickCenter de ESPN
   homeCornersData, awayCornersData,
+  homeShotsData, awayShotsData,
+  homeFoulsData, awayFoulsData,
   homeCardsData, awayCardsData,
   homeSlots, awaySlots,
   homeFormAtHome, awayFormAway,
@@ -320,6 +459,8 @@ export function generatePicks({
   marketOdds = null,
   matchStandings = null,
   advancedStats = null,
+  refereeStats = null,
+  rosters = null,
 }) {
   const picks = [];
 
@@ -339,15 +480,70 @@ export function generatePicks({
   const isCupMatch = /cup|copa|taça|pokal|coppa|friendl/i.test(leagueName);
   const isSudamericana = /sudamericana/i.test(leagueName);
   const isDefensiveLeague = /serie a|primeira liga|portugal|italia/i.test(leagueName);
+  // ── Liga 1 Perú: Ajuste Especial ─────────────────────────────
+  const isLiga1Peru = /liga 1|liga1|peru|perú/i.test(leagueName);
+
+  // ── MLS (USA): Liga Cerrada sin Descensos ────────────────────
+  const isMLS = /mls|major league soccer|usa\.1/i.test(leagueName);
+
+  // ── LaLiga España: Módulo específico ─────────────────────────
+  // LaLiga es la liga táctica europea por excelencia: baja anotación (~2.4 goles/p),
+  // muchas tarjetas por VAR estricto y final de temporada muy cerrado por el descenso.
+  const isLaLiga = /laliga|la liga|spain|españa|esp\.1|primera.*división/i.test(leagueName);
+  // Equipos en zona de descenso real en LaLiga (últimas 3 posiciones de 20)
+  // Se detecta dinámicamente via matchStandings; este flag se activa abajo.
+  let laLigaRelegationZone = false;
+  if (isLaLiga && matchStandings && matchStandings.total >= 18) {
+    const tot = matchStandings.total;
+    laLigaRelegationZone =
+      matchStandings.homeRank >= tot - 2 || matchStandings.awayRank >= tot - 2;
+  }
+  // Equipos "grandes" de LaLiga que generan miedo en rivales pequeños
+  const LALIGA_GIANTS = ['real madrid', 'barcelona', 'atlético madrid', 'atletico madrid', 'sevilla', 'real sociedad', 'villarreal', 'athletic'];
+  const homeIsLaLigaGiant = isLaLiga && LALIGA_GIANTS.some(t => homeTeamName.toLowerCase().includes(t));
+  const awayIsLaLigaGiant = isLaLiga && LALIGA_GIANTS.some(t => awayTeamName.toLowerCase().includes(t));
 
   // ── #0: Nuevos Factores de Prevención (Fatiga y Altitud) ──────────
   const homeFatigue = checkCalendarFatigue(homeHistory);
   const awayFatigue = checkCalendarFatigue(awayHistory);
-  const altitudeRisk = checkAltitudeRisk(awayTeamName, city);
+  const altitudeRisk = checkAltitudeRisk(awayTeamName, city, homeTeamName);
+
+  // AJUSTE #1: Resaca Internacional (copas continentales recientes)
+  const homeHangover = checkInternationalHangover(homeTeamName, homeHistory);
+  const awayHangover = checkInternationalHangover(awayTeamName, awayHistory);
+
+  // AJUSTE ACL: Congestión de Copa Asiática (Saudi Big 4)
+  const homeACL = checkACLCongestion(homeTeamName, homeHistory);
+  const awayACL = checkACLCongestion(awayTeamName, awayHistory);
+  // Si hay riesgo ACL, añadimos una penalización adicional sobre la resaca estándar
+  const homeACLPenalty = homeACL.isAtRisk ? 18 : 0;
+  const awayACLPenalty = awayACL.isAtRisk ? 18 : 0;
 
   let homeFatiguePenalty = homeFatigue ? 12 : 0;
   let awayFatiguePenalty = awayFatigue ? 12 : 0;
-  let altitudePenalty = altitudeRisk ? 15 : 0; // Penalización extra para jerarquía en altura
+
+  // Sumar la penalización de resaca internacional (no acumula con la fatiga de calendario)
+  // El ACL Penalty es adicional y se apila porque es un riesgo de rotación diferente a la fatiga pura.
+  homeFatiguePenalty = Math.max(homeFatiguePenalty, homeHangover.penalty) + homeACLPenalty;
+  awayFatiguePenalty = Math.max(awayFatiguePenalty, awayHangover.penalty) + awayACLPenalty;
+
+  // AJUSTE #3: Suavizar penalización de altitud para Big 3 con alto control de posesión.
+  // Si el visitante (Big 3) promedió >60% de posesión en sus últimos partidos,
+  // se asume que pueden controlar el ritmo del juego a pesar de la altitud.
+  const PERU_BIG3_NAMES = ['universitario', 'alianza lima', 'sporting cristal'];
+  const isAwayBig3Visitor = PERU_BIG3_NAMES.some(t => awayTeamName.toLowerCase().includes(t));
+  const awayAvgPossession = advancedStats?.away?.possession ?? null;
+  let altitudeSofteningNote = '';
+  let altitudeSoftening = 0;
+  if (isLiga1Peru && isAwayBig3Visitor && altitudeRisk === 'high' && awayAvgPossession !== null && awayAvgPossession > 60) {
+    altitudeSoftening = 8; // Suavizamos 8 puntos: de 28 → 20
+    altitudeSofteningNote = `Posesión visitante alta (${awayAvgPossession}%) modera el impacto de la altura.`;
+  }
+
+  // Penalización por altitud escalonada según origen del visitante
+  let altitudePenalty = altitudeRisk === 'high' ? (28 - altitudeSoftening) // Costeño en altura → penalización máxima (suavizada si alta posesión)
+                      : altitudeRisk === 'medium' ? 18 // Jerarquía foránea en altura
+                      : 0;
 
   const homeAvgGF = homeForm.total > 0 ? +(homeForm.goalsFor  / homeForm.total).toFixed(2) : 0;
   const homeAvgGA = homeForm.total > 0 ? +(homeForm.goalsAgainst / homeForm.total).toFixed(2) : 0;
@@ -358,11 +554,13 @@ export function generatePicks({
   // Con pocos partidos exigimos mayor umbral de probabilidad para reducir falsos positivos
   const minSample = Math.min(homeTotal, awayTotal);
   // Umbral dinámico: con 6 PJ exigimos 70%, con 12 PJ exigimos 62%
-  const dynamicMinProb = minSample >= 12 ? 62
-    : minSample >= 10 ? 64
-    : minSample >= 8  ? 66
-    : minSample >= 6  ? 68
-    : 70; // < 6 PJ nunca llega aquí (bloqueado arriba)
+  // ── #1: Filtro de Selectividad "Sniper Mode" ─────────────────
+  // Para alcanzar >80% de acierto, exigimos umbrales matemáticos mucho más altos.
+  const dynamicMinProb = minSample >= 12 ? 75
+    : minSample >= 10 ? 76
+    : minSample >= 8  ? 78
+    : minSample >= 6  ? 80
+    : 80; // < 6 PJ nunca llega aquí (bloqueado arriba)
 
   // ── #2: Penalización por lesiones ──────────────────────────────
   // Contamos bajas por equipo. Cada baja resta pequeña parte de la proyección de goles
@@ -381,6 +579,62 @@ export function generatePicks({
   // Penaliza el score de forma en 3 puntos por cada baja (cap 12pts)
   const homeFormPenalty = Math.min(homeInjuries * 3, 12);
   const awayFormPenalty = Math.min(awayInjuries  * 3, 12);
+
+  // ── #2b: Validación de Alineaciones (Roster Analysis) ──────────
+  // Detecta si un jugador ofensivo clave está AUSENTE del XI titular.
+  // Un "jugador clave" es el delantero o centrocampista con más goles en el roster.
+  let homeLineupNote = '';
+  let awayLineupNote = '';
+  let homeRosterGoalsPenalty = 0;
+  let awayRosterGoalsPenalty = 0;
+
+  if (rosters && rosters.length === 2) {
+    const analyzeRoster = (rosterEntry) => {
+      const starters = (rosterEntry.roster || []).filter(p => p.starter);
+      const bench    = (rosterEntry.roster || []).filter(p => !p.starter);
+      
+      // Extraemos los goles de cada jugador de campo (no porteros) del roster completo
+      const getGoals = (p) => {
+        const stat = (p.stats || []).find(s => s.name === 'totalGoals');
+        return stat ? parseFloat(stat.value || 0) : 0;
+      };
+      const attackers = (rosterEntry.roster || []).filter(p => {
+        const pos = p.position?.abbreviation?.toUpperCase();
+        return pos === 'F' || pos === 'FW' || pos === 'MF' || pos === 'M';
+      });
+
+      if (!attackers.length) return null;
+
+      // Buscamos al jugador con más goles
+      const topScorer = attackers.reduce((best, p) => getGoals(p) > getGoals(best) ? p : best, attackers[0]);
+      const topGoals  = getGoals(topScorer);
+      if (topGoals < 2) return null; // No es un goleador diferencial si marcó menos de 2
+
+      const name = topScorer.athlete?.displayName || 'Goleador clave';
+      const isStarting = starters.some(p => p.athlete?.id === topScorer.athlete?.id);
+
+      if (!isStarting) {
+        return { name, goals: topGoals, note: `[📋 ALINEACIÓN] ${name} (${topGoals} goles) no figura en el XI titular.` };
+      }
+      return null;
+    };
+
+    // Identificamos qué roster es local y cuál es visitante
+    const homeRosterEntry = rosters.find(r => r.homeAway === 'home') || rosters[0];
+    const awayRosterEntry = rosters.find(r => r.homeAway === 'away') || rosters[1];
+
+    const homeAbsent = analyzeRoster(homeRosterEntry);
+    const awayAbsent = analyzeRoster(awayRosterEntry);
+
+    if (homeAbsent) {
+      homeRosterGoalsPenalty = 0.15; // Penalización de 0.15 λ al gol esperado
+      homeLineupNote = homeAbsent.note;
+    }
+    if (awayAbsent) {
+      awayRosterGoalsPenalty = 0.15;
+      awayLineupNote = awayAbsent.note;
+    }
+  }
 
   // ── #3: Penalización por cansancio (días de descanso) ─────────────
   // < 3 días = alta fatiga, 3-4 días = leve, ≥5 días = descansado
@@ -403,55 +657,291 @@ export function generatePicks({
     xGBoostAway = (advancedStats.away.xG - awayAvgGF) * 0.25;
   }
 
-  // ── #5: Factor Motivación (Posición en Tabla) ───────────────────
+  // ── #5: Factor Motivación — Sistema Jerárquico de Contexto ─────────────
+  // JERARQUÍA (en orden de importancia):
+  //   1. ¿El colero AÚN PELEA? (FightIndex: mide cuánto está luchando por sus puntos)
+  //   2. ¿El grande tiene objetivos pendientes? (ObjectiveStatus: ¿de vacaciones o con hambre?)
+  //   3. Promedio de goles (pesa poco al final de temporada — se aplica al final)
+
   let homeMotivPenalty = 0, awayMotivPenalty = 0;
   let homeMotivNote = '', awayMotivNote = '';
-  if (matchStandings && matchStandings.total >= 10) {
-    const tot = matchStandings.total;
-    const isClutch = (r) => r <= 4 || r >= tot - 3; // Peleando título/copas o descenso
-    const isChill = (r) => r > 5 && r < tot - 4; // Mitad de tabla
+  let relaxationGoalsPenalty = 0;
+  
+  // ── Boosts Especiales de Supervivencia ─────────────────────────
+  let survivalBoost1X = 0;
+  let survivalBoostHomeWin = 0;
+  let survivalBoostX2 = 0;
+  let survivalBoostAwayWin = 0;
 
-    if (isClutch(matchStandings.homeRank) && isChill(matchStandings.awayRank)) {
-       homeMotivPenalty = -6; // Boost (restamos penalización) de 6 puntos en forma efectiva
-       homeMotivNote = 'Alta motivación (pelea tabla)';
-    } else if (isChill(matchStandings.homeRank) && isClutch(matchStandings.awayRank)) {
-       awayMotivPenalty = -6;
-       awayMotivNote = 'Alta motivación (pelea tabla)';
+  // ── Helpers de posición ────────────────────────────────────────────────
+  const calcFightIndex = (history, teamId) => {
+    // Mide cuánto está "peleando" un colero en sus últimos 8 partidos.
+    // Priorizamos NO PERDER (Empates y Victorias) como factor de lucha.
+    if (!history || history.length === 0) return 0.5; // Sin datos = promedio
+    const recent = history.slice(0, 8);
+    let unbeaten = 0;
+    let wins = 0;
+    recent.forEach(m => {
+      const isHome = String(m.teams?.home?.id) === String(teamId);
+      const hw = m.teams?.home?.winner;
+      const aw = m.teams?.away?.winner;
+      const winner = hw ? 'home' : aw ? 'away' : 'draw';
+      const result = isHome ? (winner === 'home' ? 'W' : winner === 'draw' ? 'D' : 'L')
+                            : (winner === 'away' ? 'W' : winner === 'draw' ? 'D' : 'L');
+      if (result === 'W' || result === 'D') unbeaten++;
+      if (result === 'W') wins++;
+    });
+    // Índice basado 80% en no perder (resistencia) y 20% en ganar (golpe)
+    const unbeatenRatio = unbeaten / recent.length;
+    const winRatio = wins / recent.length;
+    return Math.min(unbeatenRatio * 0.8 + winRatio * 0.2, 1);
+  };
+
+  // ── SISTEMA DE MOTIVACIÓN Y SUPERVIVENCIA (Solo LaLiga España) ──
+  // Personalizado para España: Top 4 van a Champions.
+  if (isLaLiga && matchStandings && matchStandings.total >= 10) {
+    const tot = matchStandings.total;
+    const hr = matchStandings.homeRank;
+    const ar = matchStandings.awayRank;
+
+    const isRelegation = (r) => r >= tot - 5;  // últimos 5 puestos (ej: 15 a 20)
+    const isTop        = (r) => r <= 4;         // top 4 (Zona Champions en España)
+    const isClinched   = (r) => r <= 1;         // campeón o matemáticamente inalcanzable
+    const isMidTable   = (r) => r > 4 && r < tot - 5;
+
+    // ── CRITERIO 1: FightIndex del colero ──────────────────────────────
+    // Distingue entre "colero con mecha" vs "cadáver matemático"
+    const homeFightIndex = isRelegation(hr)
+      ? calcFightIndex(homeHistory, homeHistory?.[0]?.teams?.home?.id || homeHistory?.[0]?.teams?.away?.id)
+      : 1.0; // Si no es colero, no aplica
+    const awayFightIndex = isRelegation(ar)
+      ? calcFightIndex(awayHistory, awayHistory?.[0]?.teams?.home?.id || awayHistory?.[0]?.teams?.away?.id)
+      : 1.0;
+
+    // ── CRITERIO 2: ObjectiveStatus del grande (¿vacaciones o hambre?) ─
+    // Si el grande sigue peleando el título o la Champions, no se relaja.
+    // Si ya cumplió o está en mitad de tabla sin motivación, se relaja.
+    const awayObjective = isTop(ar) ? (isClinched(ar) ? 'vacation' : 'fighting') : 'neutral';
+    const homeObjective = isTop(hr) ? (isClinched(hr) ? 'vacation' : 'fighting') : 'neutral';
+
+    // ── LÓGICA PRINCIPAL: Colero local vs Grande visitante ─────────────
+    if (isRelegation(hr) && (isTop(ar) || isMidTable(ar))) {
+
+      // ── Si el grande no se juega nada (vacaciones) ──
+      if (awayObjective === 'vacation' || isMidTable(ar)) {
+        // Boost al colero local según qué tanto pelea (FightIndex)
+        const fightBoost = Math.round(homeFightIndex * 25); // Max +25, min 0
+        homeMotivPenalty = -fightBoost;
+
+        if (homeFightIndex >= 0.6) {
+          // Colero con mecha vs grande relajado → partido muy cerrado, pocos goles
+          relaxationGoalsPenalty = awayObjective === 'vacation' ? 0.55 : 0.35;
+          homeMotivNote = `🔥 Supervivencia (FightIdx: ${(homeFightIndex * 100).toFixed(0)}%) vs Grande Relajado → Partido Cerrado`;
+          // ¡Masivo boost de supervivencia! (Max 50 puntos para contrarrestar el sesgo de Poisson)
+          survivalBoost1X = Math.round(homeFightIndex * 50); // Sube hasta 50 puntos el 1X
+          survivalBoostHomeWin = Math.round(homeFightIndex * 30);
+        } else {
+          // Colero rendido vs grande relajado → poca motivación de ambos lados, partido muerto
+          relaxationGoalsPenalty = 0.25;
+          homeMotivNote = `💀 Colero Rendido (FightIdx: ${(homeFightIndex * 100).toFixed(0)}%) — Sin tensión real`;
+          survivalBoost1X = 10;
+        }
+
+        if (awayObjective === 'vacation') {
+          awayMotivNote = '😴 Grande de vacaciones (objetivo cumplido)';
+        } else if (isMidTable(ar)) {
+          awayMotivNote = '🧘 Visitante cómodo en tabla (sin urgencia)';
+        }
+      } else if (awayObjective === 'fighting') {
+        // Grande sigue peleando → no se relaja, partido normal con algo de tensión
+        const fightBoost = Math.round(homeFightIndex * 12); // Boost reducido al colero
+        homeMotivPenalty = -fightBoost;
+        relaxationGoalsPenalty = 0; // No aplicamos penalización de goles: el grande va a atacar
+        homeMotivNote = `⚔️ Supervivencia Local (FightIdx: ${(homeFightIndex * 100).toFixed(0)}%) vs Grande con Objetivos`;
+        awayMotivNote = '🎯 Visitante motivado (pelea clasificación/título)';
+        // Boost moderado porque el rival sí se juega la vida, pero el miedo al descenso da fuerzas extra
+        survivalBoost1X = Math.round(homeFightIndex * 40);
+        survivalBoostHomeWin = Math.round(homeFightIndex * 20);
+      }
+    }
+
+    // ── LÓGICA INVERSA: Grande local vs Colero visitante ───────────────
+    else if (isRelegation(ar) && (isTop(hr) || isMidTable(hr))) {
+      if (homeObjective === 'vacation' || isMidTable(hr)) {
+        const fightBoost = Math.round(awayFightIndex * 20); // Max +20 al visitante desesperado
+        awayMotivPenalty = -fightBoost;
+        relaxationGoalsPenalty = homeObjective === 'vacation' ? 0.40 : 0.25;
+
+        if (awayFightIndex >= 0.6) {
+          awayMotivNote = `🔥 Visitante se juega la vida (FightIdx: ${(awayFightIndex * 100).toFixed(0)}%) vs Local Relajado`;
+          survivalBoostX2 = Math.round(awayFightIndex * 35); // Visitante desesperado
+          survivalBoostAwayWin = Math.round(awayFightIndex * 18);
+        } else {
+          awayMotivNote = `💀 Visitante casi rendido (FightIdx: ${(awayFightIndex * 100).toFixed(0)}%)`;
+          survivalBoostX2 = 8;
+        }
+        if (homeObjective === 'vacation') {
+          homeMotivNote = '😴 Local de vacaciones (objetivo cumplido)';
+        } else {
+          homeMotivNote = '🧘 Local cómodo (sin presión real)';
+        }
+      } else if (homeObjective === 'fighting') {
+        // Grande local sigue con hambre: partido normal, pocos beneficios al colero
+        const fightBoost = Math.round(awayFightIndex * 8);
+        awayMotivPenalty = -fightBoost;
+        relaxationGoalsPenalty = 0;
+        awayMotivNote = `⚔️ Visitante lucha (FightIdx: ${(awayFightIndex * 100).toFixed(0)}%) pero el local tiene objetivos`;
+        survivalBoostX2 = Math.round(awayFightIndex * 30);
+        survivalBoostAwayWin = Math.round(awayFightIndex * 15);
+      }
+    }
+
+    // ── CASO GENÉRICO: Sin colero pero sí hay diferencia de urgencia ───
+    else {
+      const isClutch = (r) => r <= 4 || r >= tot - 3;
+      const isChill  = (r) => r > 5 && r < tot - 4;
+      if (isClutch(hr) && isChill(ar)) {
+        homeMotivPenalty = -15;
+        homeMotivNote = 'Urgencia máxima (pelea tabla)';
+      } else if (isChill(hr) && isClutch(ar)) {
+        awayMotivPenalty = -15;
+        awayMotivNote = 'Urgencia máxima (pelea tabla)';
+      }
     }
   }
 
   // Aplicamos todos los ajustes a los promedios de gol y scores de forma
-  const adjHomeAvgGF = Math.max(homeAvgGF - homeInjPenalty - homeRest.goalsPenalty + xGBoostHome, 0.3);
-  const adjAwayAvgGF = Math.max(awayAvgGF - awayInjPenalty  - awayRest.goalsPenalty + xGBoostAway, 0.3);
+  const adjHomeAvgGF = Math.max(homeAvgGF - homeInjPenalty - homeRest.goalsPenalty + xGBoostHome - homeRosterGoalsPenalty, 0.3);
+  const adjAwayAvgGF = Math.max(awayAvgGF - awayInjPenalty  - awayRest.goalsPenalty + xGBoostAway - awayRosterGoalsPenalty, 0.3);
   const adjHomeAvgGA = homeAvgGA; // Las defensas no se ven tan afectadas
   const adjAwayAvgGA = awayAvgGA;
 
-  const projectedGoals = +((adjHomeAvgGF + adjAwayAvgGF + adjHomeAvgGA + adjAwayAvgGA) / 2).toFixed(2);
+  const isSaudi = /saudi|arabia/i.test(leagueName);
+  // LaLiga: media de goles más baja de las 5 grandes ligas (~2.4 goles/p = λ 1.18)
+  // Esto evita que el modelo sobreestime goles en España.
+  const leagueAvg = isSaudi ? 1.48 : isLaLiga ? 1.18 : 1.3;
+
+  const lambdaHome = (adjHomeAvgGF * adjAwayAvgGA) / leagueAvg;
+  const lambdaAway = (adjAwayAvgGF * adjHomeAvgGA) / leagueAvg;
+  const projectedGoals = Math.max(+(lambdaHome + lambdaAway - relaxationGoalsPenalty).toFixed(2), 0.5);
+
+  // ── #6: Elo Rating + Dixon-Coles (Nivel Institucional) ─────────────
+  // Combina poder histórico (Elo) + forma actual (Dixon-Coles) para
+  // generar probabilidades de nivel "Sharp Book" en paralelo.
+  const eloCombined = calcCombinedProbs({
+    homeTeamName,
+    awayTeamName,
+    homeAvgGF: adjHomeAvgGF,
+    homeAvgGA: adjHomeAvgGA,
+    awayAvgGF: adjAwayAvgGF,
+    awayAvgGA: adjAwayAvgGA,
+    homeHistory,
+    awayHistory,
+    isCupMatch,
+    leagueName,
+  });
+  // Cada 50 pts de diferencia Elo = 1 punto de efectividad (cap ±10)
+  const eloAdj = Math.min(Math.max(Math.round(eloCombined._elo.eloDiff / 50), -10), 10);
+  const eloLabel = `Elo: ${eloCombined._elo.homeElo} vs ${eloCombined._elo.awayElo} (Δ${eloCombined._elo.eloDiff >= 0 ? '+' : ''}${eloCombined._elo.eloDiff})`;
+
+  // ── #7: Expectativa Pitagórica ─────────────────────────────────
+  // Detecta si un equipo está ganando por encima o por debajo de su capacidad
+  // real (medida por goles a favor/en contra). La regresión a la media es inevitable.
+  const homeTeamId = homeHistory?.[0]?.teams?.home?.id || homeHistory?.[0]?.teams?.away?.id || null;
+  const awayTeamId = awayHistory?.[0]?.teams?.home?.id || awayHistory?.[0]?.teams?.away?.id || null;
+  const homePythag = calcPythagoreanExpectation(homeHistory, homeTeamId);
+  const awayPythag = calcPythagoreanExpectation(awayHistory, awayTeamId);
+
+  // ── #8: Índice de Volatilidad (Glicko-2 simplificado) ──────────
+  // Mide la incertidumbre del Elo según inactividad y zigzag de resultados.
+  // Alta volatilidad → picks más conservadores (penalización de confianza).
+  const homeVolatility = calcVolatilityIndex(homeHistory, homeTeamId);
+  const awayVolatility  = calcVolatilityIndex(awayHistory, awayTeamId);
 
   // Notas de contexto que se inyectarán en los argumentos de los picks
   const homeContextNote = [
     homeInjuries > 0 ? `${homeInjuries} baja(s)` : '',
     homeRest.label,
+    homeHangover.note,
     advancedStats?.home?.xG ? `xG: ${advancedStats.home.xG}` : '',
     homeMotivNote,
   ].filter(Boolean).join(', ');
   const awayContextNote = [
     awayInjuries > 0 ? `${awayInjuries} baja(s)` : '',
     awayRest.label,
+    awayHangover.note,
     advancedStats?.away?.xG ? `xG: ${advancedStats.away.xG}` : '',
     awayMotivNote,
+    altitudeSofteningNote,
   ].filter(Boolean).join(', ');
 
   const isHomeFortress = homeFormAtHome?.total >= 4 && homeFormAtHome?.losses === 0;
   
   const homeScoreAdv = homeForm.score - awayForm.score;
+  
+  // ── Liga 1 Perú: Excepciones y Jerarquía ─────────────────────
+  let liga1HomeBonus = isLiga1Peru ? 18 : 0;
+  
+  // Excepción Alianza Atlético (Sullana): Cuando juegan contra U o Alianza Lima, 
+  // la federación los hace jugar en Trujillo (terreno neutral/sin ventaja térmica).
+  const isSullanaHome = homeTeamName.toLowerCase().includes('alianza atletico') || homeTeamName.toLowerCase().includes('alianza atlético');
+  const isAwayUorAlianza = awayTeamName.toLowerCase().includes('universitario') || awayTeamName.toLowerCase().includes('alianza lima');
+  if (isLiga1Peru && isSullanaHome && isAwayUorAlianza) {
+    liga1HomeBonus = 0; // Pierden el bonus de localía brutal de Sullana
+  }
+
+  // Factor "Césped Sintético" en Liga 1 Perú
+  const isSyntheticHome = ['unión comercio', 'union comercio', 'chankas', 'los chankas'].some(t => homeTeamName.toLowerCase().includes(t));
+  let syntheticPenalty = 0;
+  if (isLiga1Peru && isSyntheticHome) {
+    const isSyntheticAway = ['unión comercio', 'union comercio', 'chankas', 'los chankas'].some(t => awayTeamName.toLowerCase().includes(t));
+    if (!isSyntheticAway) syntheticPenalty = 8;
+  }
+
+  // "Survival Boost" (Efecto Descenso) ahora es global, omitimos el específico de Liga 1.
+  
   // Usa forma en casa del local con penalizaciones de lesión, cansancio y motivación aplicadas. Bonifica si es fortaleza.
+  // Incluye ajuste pitagórico y penalización de volatilidad (Fase 1 de mejoras institucionales).
   let homeEffectiveScore = Math.max(
-    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score) - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty - homeFatiguePenalty + (isHomeFortress ? 15 : 0), 0
+    (homeFormAtHome?.total >= 3 ? homeFormAtHome.score : homeForm.score)
+    - homeFormPenalty - homeRest.formPenalty - homeMotivPenalty - homeFatiguePenalty
+    + (isHomeFortress && liga1HomeBonus > 0 ? 15 : 0) + liga1HomeBonus + eloAdj
+    + homePythag.adjustment        // Pitagórico: penaliza si gana con suerte, boost si infravalorado
+    - homeVolatility.trustPenalty, // Volatilidad: reduce confianza si está inactivo o zigzagueando
+    0
   );
   let awayEffectiveScore = Math.max(
-    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score) - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty - awayFatiguePenalty - altitudePenalty, 0
+    (awayFormAway?.total >= 3 ? awayFormAway.score : awayForm.score)
+    - awayFormPenalty - awayRest.formPenalty - awayMotivPenalty - awayFatiguePenalty
+    - altitudePenalty - syntheticPenalty - eloAdj
+    + awayPythag.adjustment        // Pitagórico: mismo ajuste para el visitante
+    - awayVolatility.trustPenalty, // Volatilidad: penaliza al visitante inestable
+    0
   );
+
+  // Jerarquía Global (Big Teams): Protegemos a los equipos grandes
+  // para que el algoritmo nunca los trate como equipos débiles, asegurando un piso de rendimiento.
+  const isHomeHierarchy = HIERARCHY_TEAMS.some(t => homeTeamName.toLowerCase().includes(t)) || 
+                          (isLiga1Peru && ['universitario', 'alianza lima', 'sporting cristal'].some(t => homeTeamName.toLowerCase().includes(t)));
+  const isAwayHierarchy = HIERARCHY_TEAMS.some(t => awayTeamName.toLowerCase().includes(t)) || 
+                          (isLiga1Peru && ['universitario', 'alianza lima', 'sporting cristal'].some(t => awayTeamName.toLowerCase().includes(t)));
+
+  // AJUSTE #2: Sniper Clean Sheet Guard
+  // El piso de jerarquía local se eleva a 65, PERO si la defensa está porosa 
+  // (concedió en sus últimos 3 de casa), NO aplicamos el piso de Sniper (sí el piso básico de 58).
+  const homeId = homeHistory?.[0]?.teams?.home?.id || homeHistory?.[0]?.teams?.away?.id || null;
+  const sniperGuardOk = checkSniperCleanSheetGuard(homeFormAtHome, homeId, homeHistory);
+
+  if (isHomeHierarchy) {
+    if (sniperGuardOk) {
+      homeEffectiveScore = Math.max(homeEffectiveScore, 65); // Piso de jerarquía pleno en casa
+    } else {
+      homeEffectiveScore = Math.max(homeEffectiveScore, 58); // Piso reducido: defensa porosa detectada
+    }
+  }
+  if (isAwayHierarchy && altitudeRisk !== 'high') {
+    awayEffectiveScore = Math.max(awayEffectiveScore, 60); // Piso de jerarquía de visita (si no hay altura extrema)
+  }
 
   // Penalización Sudamericana: Visitantes sufren más en este torneo (15% extra skeptiscim)
   if (isSudamericana) {
@@ -468,8 +958,251 @@ export function generatePicks({
   const h2hWeight  = h2hData ? 0.10 : 0;
   const teamWeight = h2hData ? 0.45 : 0.5;
 
+  // ── Traductor a Lenguaje Coloquial Peruano (Modo Chalaca) ───────
+  const translateToPeruvian = (text) => {
+    if (!text) return text;
+    let p = text;
+    
+    // Términos técnicos → Coloquiales
+    p = p.replace(/Poisson indica/gi, "La calculadora me dice que");
+    p = p.replace(/superior en forma efectiva/gi, "viene más embalado");
+    p = p.replace(/claramente superior/gi, "está en su salsa");
+    p = p.replace(/inferior/gi, "viene medio golpeado");
+    p = p.replace(/Protección ante el empate/gi, "por si las moscas, nos cubrimos con el empate");
+    p = p.replace(/Probabilidad/gi, "Chance");
+    p = p.replace(/proyecta/gi, "pinta para");
+    p = p.replace(/histórico/gi, "de toda la vida");
+    p = p.replace(/ventaja/gi, "está un paso adelante");
+    p = p.replace(/Value Bet/gi, "¡Fierrazo con cuota de regalo!");
+    p = p.replace(/el mercado paga/gi, "la casa de apuestas se ha palteado y paga");
+    p = p.replace(/nosotros proyectamos/gi, "nosotros le tenemos más fe y vemos un");
+    p = p.replace(/Zona Descenso/gi, "Están con el agua al cuello");
+    p = p.replace(/máxima tensión táctica/gi, "se juegan el pellejo");
+    p = p.replace(/baja anotación/gi, "partido bien tacaño con los goles");
+    p = p.replace(/Dixon-Coles confirma/gi, "las matemáticas me dan la razón");
+    p = p.replace(/Doble confirmación/gi, "está recontra asegurado");
+    p = p.replace(/Potencial ofensivo/gi, "están con la mecha prendida");
+    p = p.replace(/defensa sólida/gi, "están bien parados atrás");
+    p = p.replace(/se juegan mucho/gi, "están que queman");
+    p = p.replace(/Cuota de valor/gi, "Está para aprovecharla");
+    p = p.replace(/remontada/gi, "volteada");
+    p = p.replace(/apostar/gi, "meterle unas fichas");
+    p = p.replace(/está de relajo/gi, "está en modo vacaciones");
+    p = p.replace(/ya son campeones/gi, "ya campeonaron, juegan por cumplir");
+    p = p.replace(/Urgencia máxima/gi, "Están desesperados por los puntos");
+
+    // Muletillas peruanas al inicio o final (probabilístico para variedad)
+    const filler = ["Sobrino, ", "Habla, ", "Mira, ", "Te canto la fija: ", "Ojo ahí, ", "Atento, "];
+    const ender = [". ¡Aprovecha!", ". Está cantado.", ". ¡No seas sano!", ". Es un fierrazo.", ". ¡Gente, ahí está el billete!", ". Vamos con todo."];
+    
+    if (!p.includes("Sobrino") && Math.random() > 0.4) {
+      p = filler[Math.floor(Math.random() * filler.length)] + p;
+    }
+    if (Math.random() > 0.4) {
+      p = p + ender[Math.floor(Math.random() * ender.length)];
+    }
+
+    return p;
+  };
+
+  // ── Constructor de Argumento Narrativo en Lenguaje Sencillo ─────
+  // Genera una explicación de 1-2 líneas en español coloquial peruano
+  // basada en el contexto real del partido (motivación, jerarquía, forma).
+  const buildNarrativeArgument = (market, selection) => {
+    const home = homeTeamName;
+    const away = awayTeamName;
+    const homeStar  = isHomeHierarchy;
+    const awayStar  = isAwayHierarchy;
+    const homeUrgent = homeMotivNote.toLowerCase().includes('urgencia') || homeContextNote.toLowerCase().includes('urgencia');
+    const awayUrgent = awayMotivNote.toLowerCase().includes('urgencia') || awayContextNote.toLowerCase().includes('urgencia');
+    const homeStrong  = homeEffectiveScore >= 65;
+    const awayStrong  = awayEffectiveScore >= 65;
+    const homeTired   = homeRest.label.includes('Cansancio') || homeRest.label.includes('Poco');
+    const awayTired   = awayRest.label.includes('Cansancio') || awayRest.label.includes('Poco');
+    const homeInjured = homeInjuries > 0;
+    const awayInjured = awayInjuries > 0;
+    const bigGoals    = projectedGoals >= 2.8;
+    const lowGoals    = projectedGoals <= 2.0;
+    const isChampion  = awayContextNote.toLowerCase().includes('campe') || homeContextNote.toLowerCase().includes('campe');
+    const relegZone   = laLigaRelegationZone ||
+                        homeContextNote.toLowerCase().includes('descenso') ||
+                        awayContextNote.toLowerCase().includes('descenso') ||
+                        homeUrgent || awayUrgent;
+
+    // Piezas de contexto reutilizables
+    const urgencyLine = homeUrgent
+      ? `${home} se juega el pellejo en esta cancha — necesita los puntos sí o sí.`
+      : awayUrgent
+        ? `${away} llega con el agua al cuello y va a salir a buscar el resultado a como dé lugar.`
+        : '';
+    const hierarchyLine = (homeStar && !awayStrong)
+      ? `${home} es un equipo grande; aunque el rival lo intente, la jerarquía suele pesar.`
+      : (awayStar && !homeStrong)
+        ? `${away} viene con más calidad encima y eso se nota cuando el partido se complica.`
+        : '';
+    const fatigueLine = homeTired
+      ? `${home} viene con las piernas pesadas, jugó hace muy poco.`
+      : awayTired
+        ? `${away} llega cansado — jugó hace poquísimos días y eso se siente en el segundo tiempo.`
+        : '';
+    const injuryLine = homeInjured
+      ? `${home} tiene bajas importantes en su alineación.`
+      : awayInjured
+        ? `${away} no viene completo; le faltan jugadores clave.`
+        : '';
+    const relaxLine = isChampion
+      ? `Un equipo ya campeonó y hoy sale a cumplir — sin esa hambre que te da jugarte algo importante.`
+      : '';
+
+    // ── Narrativas por mercado ──────────────────────────────────────
+    const sel = (selection || '').toLowerCase();
+    const goalsNote = bigGoals
+      ? `El modelo proyecta unos ${projectedGoals} goles en total, lo cual es bastante.`
+      : lowGoals
+        ? `El modelo solo espera ${projectedGoals} goles en total, así que el partido pinta cerrado.`
+        : `El modelo proyecta alrededor de ${projectedGoals} goles en total.`;
+
+    // Doble Oportunidad X2
+    if (market === 'Doble Oportunidad' && sel.includes('x2')) {
+      if (relaxLine && urgencyLine) {
+        return `${relaxLine} ${urgencyLine} En ese escenario, el visitante puede salir a especular y el empate se convierte en un resultado muy probable. La apuesta X2 te cubre tanto si el visitante gana como si empatan, dándote dos oportunidades de cobrar en lugar de una sola.`;
+      }
+      if (awayStar) {
+        return `${hierarchyLine} Aunque ${home} empuje de local, el visitante tiene el nivel suficiente para al menos no perder. ${fatigueLine || ''} Con esta apuesta ganas si el partido termina en empate o con victoria del visitante — no necesitas que gane con autoridad, basta con que no pierda.`.trim();
+      }
+      return `El visitante llega en un buen momento y fuera de casa también sabe rendir. Un empate siempre es posible en este tipo de partidos y esta apuesta te protege de eso. ${goalsNote} Con el X2 tienes dos de los tres resultados posibles a tu favor.`;
+    }
+
+    // Doble Oportunidad 1X
+    if (market === 'Doble Oportunidad' && sel.includes('1x')) {
+      if (homeUrgent) {
+        return `${home} necesita los puntos con urgencia y eso se nota en cómo un equipo sale al campo — con más intensidad, más presión y más ganas de no ceder. Cuando un equipo pelea por la tabla de local, raramente pierde. La apuesta 1X te cubre tanto si gana como si empatan, así que si el partido se tranca y no hay ganador claro, igual cobras.`;
+      }
+      if (homeStar) {
+        return `${hierarchyLine} De local y con su gente en las tribunas, ${home} tiene un piso de rendimiento muy alto — es muy difícil que salga de su cancha sin nada. ${fatigueLine || ''} La 1X te da dos resultados a tu favor: si gana cobras, si empata también. Solo pierdes si el visitante da el golpe de gracia.`.trim();
+      }
+      return `${home} está bien en casa esta temporada y el partido pinta trabado. La 1X es la apuesta más inteligente cuando no estás seguro del resultado exacto pero sí confías en que el local no debería perder. ${goalsNote} Si el partido se pone difícil, el empate es siempre el "salvavidas" del local.`;
+    }
+
+    // Más de 1.5 goles
+    if (market === 'Total de Goles' && sel.includes('1.5') && sel.includes('más')) {
+      if (bigGoals) {
+        return `Ambos equipos vienen anotando con regularidad y los números lo respaldan. ${goalsNote} Para que pierdas esta apuesta, el partido tendría que terminar 1-0 o 0-0 — y eso es bastante raro dado cómo viene el marcador promedio de los dos. Es una de las apuestas más "seguras" del mercado cuando ambos tienen ritmo goleador.`;
+      }
+      if (urgencyLine) {
+        return `${urgencyLine} Cuando un equipo necesita los tres puntos, el partido se abre porque no puede jugar especulando. Eso suele generar más llegadas y más goles. ${goalsNote} Aunque solo necesitas 2 goles para ganar esta apuesta, lo más probable es que el partido tenga bastante más movimiento que eso.`;
+      }
+      return `Los dos equipos anotan con regularidad esta temporada. ${goalsNote} Que el partido termine 0-0 o 1-0 sería una rareza — los números nos dicen que casi siempre hay al menos dos goles cuando estos equipos juegan. Es la apuesta de menor riesgo dentro del mercado de goles.`;
+    }
+
+    // Más de 2.5 goles
+    if (market === 'Total de Goles' && sel.includes('2.5') && sel.includes('más')) {
+      if (bigGoals && !relaxLine) {
+        return `Los dos equipos atacan bien y ninguno defiende de manera sólida. ${goalsNote} Que el partido tenga 3 o más goles es el escenario más esperado — no sería ninguna sorpresa. ${urgencyLine || ''} Esta es una apuesta que el modelo recomienda cuando la proyección de goles supera claramente el umbral de 2.5.`.trim();
+      }
+      if (relaxLine) {
+        return `${relaxLine} Sin embargo, el otro equipo sí tiene motivos para atacar y va a salir a buscar el resultado. Eso abre espacios y los goles suelen aparecer cuando uno empuja y el otro especula. ${goalsNote} Con 3 goles o más, esta apuesta cierra.`;
+      }
+      return `El partido pinta para ir de ida y vuelta. ${goalsNote} Con los promedios de gol de ambos, 3 tantos o más es el resultado más natural. Esta apuesta tiene sentido cuando los dos equipos llegan con buen ritmo ofensivo y sin necesidad de cerrarse atrás.`;
+    }
+
+    // Menos de 2.5 goles
+    if (market === 'Total de Goles' && sel.includes('2.5') && sel.includes('menos')) {
+      if (relegZone) {
+        return `Cuando uno o los dos equipos están peleando el descenso, el partido cambia completamente de carácter. Se juegan demasiado como para arriesgarse — se cierran atrás, cuidan el resultado y atacan solo con garantías. ${goalsNote} En ese tipo de partidos los goles escasean y el Under 2.5 tiene mucho valor.`;
+      }
+      if (lowGoals) {
+        return `Ninguno de los dos anota mucho esta temporada — son equipos que cuidan más el arco que el ataque. ${goalsNote} Un partido trabado y cerrado es lo más probable acá. La apuesta Under 2.5 gana si el partido termina 0-0, 1-0, 0-1, 1-1 o 2-0/0-2.`;
+      }
+      return `Los dos equipos llegan con la cabeza más en el resultado que en hacer un espectáculo. ${goalsNote} Se esperan pocas llegadas claras y el partido tiene pinta de definirse con poco margen. Under 2.5 es una apuesta táctica para partidos donde ninguno se suele ir al ataque sin control.`;
+    }
+
+    // Más de 3.5 goles
+    if (market === 'Total de Goles' && sel.includes('3.5')) {
+      return `El partido pinta para una fiesta de goles. ${goalsNote} ${urgencyLine || ''} Ambos equipos atacan con ritmo y las defensas de los dos dejan espacios. Con 4 goles o más, esta apuesta cierra — y según los números no es una locura pedirlo. Es el mercado ideal cuando el modelo proyecta un partido muy abierto.`.trim();
+    }
+
+    // Victoria Local
+    if (market === 'Ganador del Partido' && sel.includes('local')) {
+      const ctx = [urgencyLine, hierarchyLine, fatigueLine ? `Por si fuera poco, ${fatigueLine.toLowerCase()}` : '', injuryLine ? `Además, ${injuryLine.toLowerCase()}` : ''].filter(Boolean);
+      if (ctx.length > 0) {
+        return `${ctx.join(' ')} ${goalsNote} Todos estos factores juntos apuntan a ${home} como el favorito claro del partido hoy.`;
+      }
+      return `${home} está en un gran momento y de local se le ve sólido. ${goalsNote} Sus números en casa esta temporada respaldan que hoy puede ganar — tiene la forma, el apoyo del público y el terreno conocido a su favor.`;
+    }
+
+    // Victoria Visitante
+    if (market === 'Ganador del Partido' && sel.includes('visitante')) {
+      const ctx = [urgencyLine || hierarchyLine, fatigueLine ? `Para colmo, ${fatigueLine.toLowerCase()}` : '', injuryLine ? `Y ${injuryLine.toLowerCase()}` : ''].filter(Boolean);
+      if (ctx.length > 0) {
+        return `${ctx.join(' ')} ${goalsNote} Con todo eso, ${away} llega como favorito y tiene los argumentos para llevarse los tres puntos de aquí.`;
+      }
+      return `${away} viene en racha y de visita también sabe rendir. ${goalsNote} El local no está en su mejor momento como para plantarle cara — los números del visitante fuera de casa esta temporada son muy buenos.`;
+    }
+
+    // Empate
+    if (market === 'Ganador del Partido' && sel.includes('empate')) {
+      if (relaxLine) {
+        return `${relaxLine} En ese contexto, el empate no le viene mal a ninguno — uno porque no se la juega y el otro porque puede conformarse con el punto. ${goalsNote} Las matemáticas lo ven como el resultado más "neutral" del partido y la historia entre estos dos equipos también lo respalda.`;
+      }
+      return `Los dos equipos están bastante parejos en nivel esta temporada. Ninguno domina claramente al otro y el partido podría ir para cualquier lado. ${goalsNote} El empate es el resultado que aparece más frecuente en este tipo de enfrentamientos equilibrados — y el modelo lo recoge como una opción real.`;
+    }
+
+    // Ambos Marcan
+    if (market === 'Ambos Marcan') {
+      if (homeInjured || awayInjured) {
+        return `${injuryLine} A pesar de eso, ambos equipos tienen jugadores que llegan al arco con regularidad y la costumbre de marcar en sus partidos. ${goalsNote} Esta apuesta no pide que haya muchos goles — solo que los dos equipos anoten al menos uno cada uno, y eso es algo que suele pasar con estos rivales.`;
+      }
+      return `Los dos equipos anotan seguido — tanto el local como el visitante tienen jugadores que generan peligro y terminan dentro del marcador. ${goalsNote} No se trata solo de que haya goles en el partido, sino de que los dos equipos aparezcan en el tablero. Según sus promedios, eso es lo más habitual.`;
+    }
+
+    // Handicap Asiático
+    if (market === 'Handicap Asiático') {
+      if (homeStar && sel.includes('local')) {
+        return `${home} tiene demasiada jerarquía para conformarse con un empate acá. El handicap asiático -0.5 es más inteligente que apostar a la victoria directa: te da exactamente la misma lógica pero con una cuota más atractiva. ${goalsNote} Si ${home} gana, tú cobras — y según el análisis, ganar es lo que el modelo espera.`;
+      }
+      if (awayStar && sel.includes('visitante')) {
+        return `${away} viene a buscar los tres puntos, no a especular con un empate. El handicap -0.5 del visitante te da la mejor cuota disponible para ese pronóstico. ${goalsNote} Si el visitante se lleva el partido — que es lo que el modelo anticipa — con el handicap cobras mejor que con el resultado directo.`;
+      }
+      return `Un equipo domina claramente en este análisis. El handicap asiático te permite apostar a esa superioridad con una cuota más jugosa que el 1X2 tradicional. ${goalsNote} Si el favorito gana como se espera, con el handicap siempre cobras mejor.`;
+    }
+
+    // Combo BTTS + Over
+    if (market === 'Combo') {
+      return `El partido tiene todos los ingredientes para un poco de todo: ataque de los dos lados, goles cruzados y bastante movimiento en el marcador. ${goalsNote} Es la apuesta "combinada" más completa: necesitas que ambos anoten y que en total haya 3 o más goles. Cuando el modelo proyecta un partido abierto, este combo tiene mucho sentido.`;
+    }
+
+    // Resultado en Vivo
+    if (market === 'Resultado en Vivo') {
+      const liveCtx = sel.includes('1x')
+        ? `El equipo local tiene el carácter y la presión del marcador para reaccionar — es difícil que se quede con nada jugando de local.`
+        : `El equipo que va perdiendo aún tiene tiempo y las condiciones del partido indican que puede reaccionar.`;
+      return `Según cómo está el partido en este momento, las condiciones favorecen claramente este resultado. ${liveCtx} El motor ajusta las probabilidades minuto a minuto y en este instante ve una oportunidad real. No dejes pasar la cuota — en vivo cambia rápido.`;
+    }
+
+    // Goles en Vivo
+    if (market === 'Goles en Vivo') {
+      return `El partido ya entró en goles y quedan minutos con los dos equipos buscando el resultado. Cuando hay goles en la primera parte, las probabilidades de que vengan más en la segunda son altas — los equipos se abren y dejan espacios. El modelo calcula que todavía hay margen real para que caiga otro tanto. Entra mientras la cuota todavía es buena.`;
+    }
+
+    // Estrategia en Vivo
+    if (market === 'Estrategia en Vivo') {
+      return `Esta no es para entrarla ahorita — es una estrategia para tenerla lista y activarla si el partido llega a esa situación. Cuando se da ese escenario, la cuota sube mucho y ahí es donde está el valor real. El motor la detecta como una oportunidad potencial de alta recompensa. Monitorea el partido y entra en el momento exacto.`;
+    }
+
+    // Genérico
+    return `El análisis de forma, jerarquía y contexto de ambos equipos apunta a este resultado como el más probable hoy. ${goalsNote} El motor lo identifica como una oportunidad clara después de cruzar los datos de los últimos partidos de los dos equipos.`;
+  };
+
+
+
   // Helper to add a pick with calculated fair odds o cuotas reales de ESPN
   const addPick = (pick) => {
+    // Aplicar traducción coloquial peruana al argumento técnico
+    pick.argument = translateToPeruvian(pick.argument);
+    // Añadir sustento narrativo en lenguaje sencillo
+    pick.narrative = buildNarrativeArgument(pick.market, pick.selection);
+    
     // 1. Calcular cuota teórica base (y aplicar pisos realistas si ESPN falla)
     let theoreticalOdds = null;
     if (pick.probability) {
@@ -549,6 +1282,22 @@ export function generatePicks({
       pick.odds = finalOdds ? finalOdds.toFixed(2) : '1.80+';
     }
 
+    // ── Fase 2: Criterio de Kelly (Gestión de Banca) ─────────────
+    // Kelly Fraccional (1/4) para reducir volatilidad en apuestas deportivas.
+    if (finalOdds && finalOdds > 1.0 && pick.probability) {
+      const p = pick.probability / 100;
+      const o = finalOdds;
+      const fullKelly = (p * o - 1) / (o - 1);
+      
+      if (fullKelly > 0) {
+        // Cuarto de Kelly (max 5% del bankroll para evitar la ruina)
+        const quarterKelly = Math.min(fullKelly * 0.25, 0.05); 
+        pick.suggestedStake = +(quarterKelly * 100).toFixed(1); // En porcentaje (ej. 2.5)
+      } else {
+        pick.suggestedStake = 0; // Valor Esperado (EV) negativo
+      }
+    }
+
     picks.push(pick);
   };
 
@@ -614,19 +1363,39 @@ export function generatePicks({
       });
     }
 
-    // 4. Remontada del favorito Local (usa scores efectivos penalizados)
-    if (min >= 45 && liveHomeAdv >= 18 && homeEffectiveScore >= 65) {
+    // 4. Presión del favorito Local (usa scores efectivos penalizados)
+    // — Solo se activa si el local tiene ventaja real Y el visitante no es un gigante
+    const isAwayHierarchy = HIERARCHY_TEAMS.some(t => awayTeamName.toLowerCase().includes(t));
+    // Contra equipos de jerarquía exigimos un margen mucho mayor para no generar falsos positivos
+    const requiredAdv = isAwayHierarchy ? 30 : 18;
+    const requiredHomeScore = isAwayHierarchy ? 72 : 65;
+
+    if (min >= 45 && liveHomeAdv >= requiredAdv && homeEffectiveScore >= requiredHomeScore) {
       if (liveHomeGoals < liveAwayGoals || liveHomeGoals === liveAwayGoals) {
-        addPick({
-          market: 'Resultado en Vivo',
-          selection: liveHomeGoals < liveAwayGoals ? 'Local empata o gana (1X)' : 'Victoria Local',
-          probability: Math.min(Math.round(homeEffectiveScore * 0.7 + (h2hData?.homeWinPct ?? 50) * 0.3), 80),
-          tier: '🔥',
-          argument: `Local superior (Forma efectiva: ${homeEffectiveScore}% vs ${awayEffectiveScore}%). No está ganando en el min ${min}. Momento de remontada.`,
-          risk: 'Moderado',
-        });
+        const isLosing = liveHomeGoals < liveAwayGoals;
+        // Texto semánticamente correcto según el marcador actual
+        const situationLabel = isLosing
+          ? `Va perdiendo ${liveHomeGoals}-${liveAwayGoals}. Momento de remontada.`
+          : `Marcador igualado ${liveHomeGoals}-${liveAwayGoals}. Presión final: el local domina sin convertir.`;
+
+        const liveProbability = Math.min(
+          Math.round(homeEffectiveScore * 0.7 + (h2hData?.homeWinPct ?? 50) * 0.3),
+          isAwayHierarchy ? 74 : 80 // Cap más bajo contra equipos grandes
+        );
+
+        if (liveProbability >= 70) {
+          addPick({
+            market: 'Resultado en Vivo',
+            selection: isLosing ? 'Local empata o gana (1X)' : 'Victoria Local',
+            probability: liveProbability,
+            tier: '🔥',
+            argument: `Local superior en forma efectiva: ${homeEffectiveScore}% (Gral: ${homeForm.score}%) vs Visitante: ${awayEffectiveScore}% (Gral: ${awayForm.score}%). Min ${min}'. ${situationLabel}`,
+            risk: isAwayHierarchy ? 'Alto' : 'Moderado',
+          });
+        }
       }
     }
+
 
     // 5. Goles sobre la marcha (partido ya abierto)
     if (min > 20 && min < 65 && totalGoals > 0 && goalsExpectedRemaining >= 1.0) {
@@ -655,38 +1424,51 @@ export function generatePicks({
   const homeOver25Pct  = homeSplitStats?.over25Pct ?? 0;
   const awayOver25Pct  = awaySplitStats?.over25Pct ?? 0;
   const h2hOver25Pct   = h2hData?.over25Pct ?? 0;
-  const combinedOver25 = Math.round(homeOver25Pct * teamWeight + awayOver25Pct * teamWeight + h2hOver25Pct * h2hWeight);
+  let combinedOver25 = Math.round(homeOver25Pct * teamWeight + awayOver25Pct * teamWeight + h2hOver25Pct * h2hWeight);
 
   // ── Over 1.5 ──────────────────────────────────────────────────
   const homeOver15Pct  = homeSplitStats?.over15Pct ?? 0;
   const awayOver15Pct  = awaySplitStats?.over15Pct ?? 0;
   // Ahora usamos el dato real del H2H en lugar del proxy *1.2
   const h2hOver15Pct   = h2hData?.over15Pct ?? (h2hData ? Math.min(Math.round(h2hData.over25Pct * 1.2), 100) : 0);
-  const combinedOver15 = Math.round(homeOver15Pct * teamWeight + awayOver15Pct * teamWeight + h2hOver15Pct * h2hWeight);
+  let combinedOver15 = Math.round(homeOver15Pct * teamWeight + awayOver15Pct * teamWeight + h2hOver15Pct * h2hWeight);
+
+  // Penalización directa a los Over por desmotivación/partidos trabados
+  if (relaxationGoalsPenalty > 0) {
+    combinedOver15 = Math.max(combinedOver15 - 18, 0);
+    combinedOver25 = Math.max(combinedOver25 - 25, 0);
+  }
   
   const isDeepDefensiveLeague = /arg|uru|sudamericana/i.test(leagueName);
   const over15Threshold = isDeepDefensiveLeague ? 2.5 : (isDefensiveLeague ? 2.3 : 1.8);
   const requiredCombinedOver15 = isDeepDefensiveLeague ? 85 : 78;
   
   if (combinedOver15 >= requiredCombinedOver15 && projectedGoals >= over15Threshold) {
-    const prob = Math.min(combinedOver15, 91);
+    // Boost si Dixon-Coles confirma el Over 1.5 (modelo institucional de acuerdo)
+    const dcBoost15 = parseFloat(eloCombined.over15) >= combinedOver15 + 7 ? 3 : 0;
+    const prob = Math.min(combinedOver15 + dcBoost15, 91);
     if (prob >= 78) {
       addPick({
         market: 'Total de Goles',
         selection: 'Más de 1.5 goles',
         probability: prob,
         tier: prob >= 85 ? '🟢' : '🔵',
-        argument: `${combinedOver15}% de partidos con 2+ goles. Proyección: ${projectedGoals} goles. Filtro estricto superado.`,
+        argument: `${combinedOver15}% de partidos con 2+ goles (DC: ${eloCombined.over15}%). Proyección: ${projectedGoals} goles.${dcBoost15 > 0 ? ' ✅ Dixon-Coles confirma.' : ''}`,
         risk: prob >= 85 ? 'Bajo' : 'Moderado',
       });
     }
   }
 
   // ── Over 2.5 ──────────────────────────────────────────────────
-  const over25Threshold = isDefensiveLeague ? 2.7 : 2.5;
-  if (combinedOver25 >= 70 && projectedGoals >= over25Threshold) {
+  // Liga 1 Perú: exigimos un umbral más alto porque el torneo es más defensivo
+  // y los partidos suelen terminar con pocos goles (1-0, 0-0 frecuentes)
+  const over25Threshold = isLiga1Peru ? 3.2 : isDefensiveLeague ? 2.7 : 2.5;
+  const over25MinCombined = isLiga1Peru ? 78 : 70; // También exigir más frecuencia histórica
+  if (combinedOver25 >= over25MinCombined && projectedGoals >= over25Threshold) {
     const officialBoost = hasOfficial && officialWinner?.toLowerCase().includes('goals') ? 4 : 0;
-    const prob = Math.min(combinedOver25 + officialBoost, 88);
+    // Boost si Dixon-Coles también supera el umbral (doble confirmación)
+    const dcBoost25 = parseFloat(eloCombined.over25) >= over25MinCombined ? 3 : 0;
+    const prob = Math.min(combinedOver25 + officialBoost + dcBoost25, 88);
     if (prob >= 75) {
       const ctxNote = [homeContextNote, awayContextNote].filter(Boolean).join(' · ');
       addPick({
@@ -694,7 +1476,7 @@ export function generatePicks({
         selection: 'Más de 2.5 goles',
         probability: prob,
         tier: prob >= 82 ? '🟢' : '🔵',
-        argument: `${combinedOver25}% de partidos con 3+ goles. Proyección ajustada: ${projectedGoals} goles.${ctxNote ? ` Contexto: ${ctxNote}.` : ''}`,
+        argument: `${combinedOver25}% histórico con 3+ goles · DC: ${eloCombined.over25}% · λ ${eloCombined.lambdaHome}+${eloCombined.lambdaAway}. Proyección: ${projectedGoals} goles.${dcBoost25 > 0 ? ' ✅ Doble confirmación.' : ''}${ctxNote ? ` Contexto: ${ctxNote}.` : ''}`,
         risk: prob >= 82 ? 'Bajo' : 'Moderado',
       });
     }
@@ -719,15 +1501,25 @@ export function generatePicks({
 
   // ── Under 2.5 ─────────────────────────────────────────────────
   const under25Pct = 100 - combinedOver25;
-  if (under25Pct >= 72 && projectedGoals <= 2.0) {
-    const prob = Math.min(under25Pct, 86);
+  // LaLiga fin de temporada: bajamos el umbral de proyección a 2.3 (liga táctica)
+  // y reducimos el combinado mínimo a 68% porque el descenso cierra aún más los partidos.
+  const under25GoalsThreshold = isLaLiga ? 2.3 : 2.0;
+  const under25MinCombined    = isLaLiga ? 68  : 72;
+  if (under25Pct >= under25MinCombined && projectedGoals <= under25GoalsThreshold) {
+    const laLigaUnderBoost = (isLaLiga && laLigaRelegationZone) ? 8 : (isLaLiga ? 4 : 0);
+    const prob = Math.min(under25Pct + laLigaUnderBoost, 87);
     if (prob >= 75) {
+      const laLigaNote = isLaLiga
+        ? (laLigaRelegationZone
+            ? ' [🇪🇸 LaLiga · Zona Descenso] Partido de máxima tensión táctica al final de temporada.'
+            : ' [🇪🇸 LaLiga] Liga de baja anotación — proyección ajustada al modelo español.')
+        : '';
       addPick({
         market: 'Total de Goles',
         selection: 'Menos de 2.5 goles',
         probability: prob,
         tier: prob >= 82 ? '🟢' : '🔵',
-        argument: `${under25Pct}% de probabilidad de partido cerrado. Proyección: ${projectedGoals} goles. Defensa sólida de ambos equipos.`,
+        argument: `${under25Pct}% de probabilidad de partido cerrado. Proyección: ${projectedGoals} goles. Defensa sólida de ambos equipos.${laLigaNote}`,
         risk: prob >= 82 ? 'Bajo' : 'Moderado',
       });
     }
@@ -739,7 +1531,22 @@ export function generatePicks({
   const h2hBttsPct   = h2hData?.bttsPct ?? 0;
   const combinedBTTS = Math.round(homeBttsPct * teamWeight + awayBttsPct * teamWeight + h2hBttsPct * h2hWeight);
 
-  if (combinedBTTS >= 70 && projectedGoals >= 2.5) {
+  // Liga 1 Perú: Ajuste de BTTS por altitud
+  let bttsThreshold = 2.5;
+  let bttsMinCombined = 70;
+  if (isLiga1Peru) {
+    if (altitudeRisk) {
+      // En altura, es mucho más difícil que ambos anoten (visitante se ahoga)
+      bttsThreshold = 3.2;
+      bttsMinCombined = 82;
+    } else {
+      // En llano/costa (Lima, Trujillo, Callao), los partidos son más abiertos
+      bttsThreshold = 2.4;
+      bttsMinCombined = 68;
+    }
+  }
+
+  if (combinedBTTS >= bttsMinCombined && projectedGoals >= bttsThreshold) {
     const prob = Math.min(combinedBTTS, 87);
     if (prob >= 75) {
       addPick({
@@ -747,7 +1554,7 @@ export function generatePicks({
         selection: 'Sí, ambos anotan',
         probability: prob,
         tier: prob >= 82 ? '🟢' : '🔵',
-        argument: `${combinedBTTS}% de partidos con gol de ambos equipos. Local anota ${homeAvgGF}/p, Visitante ${awayAvgGF}/p.`,
+        argument: `${combinedBTTS}% de partidos con gol de ambos equipos. Local anota ${homeAvgGF}/p, Visitante ${awayAvgGF}/p. ${isLiga1Peru && altitudeRisk ? '(A pesar de la altura)' : ''}`,
         risk: prob >= 82 ? 'Bajo' : 'Moderado',
       });
     }
@@ -791,7 +1598,7 @@ export function generatePicks({
   }
 
   if (homeEffectiveScore >= 65 && awayEffectiveScore <= 45 && effectiveAdv >= 18) {
-    const prob = Math.min(Math.round(homeEffectiveScore * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4) + officialHomeBoost, 86);
+    let prob = Math.min(Math.round(homeEffectiveScore * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4) + officialHomeBoost + survivalBoostHomeWin, 86);
     if (prob >= 75) {
       const splitNote = homeFormAtHome?.total >= 3 ? ` (Casa: ${homeFormAtHome.wins}G/${homeFormAtHome.total}PJ)` : '';
       addPick({
@@ -799,7 +1606,7 @@ export function generatePicks({
         selection: 'Victoria Local',
         probability: prob,
         tier: prob >= 80 ? '🔵' : '🟡',
-        argument: `Forma local en casa: ${homeEffectiveScore}%${splitNote}. Visitante fuera: ${awayEffectiveScore}%. Ventaja: +${effectiveAdv}pts. H2H: ${h2hData?.homeWinPct ?? '?'}%.${hasOfficial ? ` Oficial: ${officialHomeWinPct}%.` : ''}`,
+        argument: `Forma local efectiva: ${homeEffectiveScore}% (Gral: ${homeForm.score}%)${splitNote}. Visitante efectivo: ${awayEffectiveScore}% (Gral: ${awayForm.score}%). Ventaja: +${effectiveAdv}pts. H2H: ${h2hData?.homeWinPct ?? '?'}%. ${eloLabel}. DC Win: ${eloCombined.home}%.${hasOfficial ? ` Oficial: ${officialHomeWinPct}%.` : ''}`,
         risk: 'Moderado',
         units: '3-5u',
       });
@@ -808,7 +1615,7 @@ export function generatePicks({
 
   // ── Ganador: Visitante ─────────────────────────────────────────
   if (awayEffectiveScore >= 65 && homeEffectiveScore <= 45 && -effectiveAdv >= 18) {
-    const prob = Math.min(Math.round(awayEffectiveScore * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4) + officialAwayBoost, 86);
+    let prob = Math.min(Math.round(awayEffectiveScore * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4) + officialAwayBoost + survivalBoostAwayWin, 86);
     if (prob >= 75) {
       const splitNote = awayFormAway?.total >= 3 ? ` (Fuera: ${awayFormAway.wins}G/${awayFormAway.total}PJ)` : '';
       addPick({
@@ -816,7 +1623,7 @@ export function generatePicks({
         selection: 'Victoria Visitante',
         probability: prob,
         tier: prob >= 80 ? '🔵' : '🟡',
-        argument: `Forma visitante fuera: ${awayEffectiveScore}%${splitNote}. Local en casa: ${homeEffectiveScore}%. H2H: ${h2hData?.awayWinPct ?? '?'}%.${hasOfficial ? ` Oficial: ${officialAwayWinPct}%.` : ''}`,
+        argument: `Forma visitante efectiva: ${awayEffectiveScore}% (Gral: ${awayForm.score}%)${splitNote}. Local efectivo: ${homeEffectiveScore}% (Gral: ${homeForm.score}%). H2H: ${h2hData?.awayWinPct ?? '?'}%. ${eloLabel}. DC Win: ${eloCombined.away}%.${hasOfficial ? ` Oficial: ${officialAwayWinPct}%.` : ''}`,
         risk: 'Moderado',
         units: '3-5u',
       });
@@ -860,15 +1667,34 @@ export function generatePicks({
   if (!isLive && poissonProbs) {
     const prob1X = Math.round(poissonProbs.home + poissonProbs.draw);
     const h2hBase1X = h2hData ? (h2hData.homeWinPct + h2hData.drawPct) : prob1X;
-    const combined1X = Math.round(prob1X * 0.6 + h2hBase1X * 0.4);
-    // Solo si el local es favorito para proteger el empate, probabilidad total > 75%
-    if (combined1X >= 75 && poissonProbs.home < 70) {
+    let combined1X = Math.round(prob1X * 0.6 + h2hBase1X * 0.4) + survivalBoost1X;
+
+    // Liga 1 Perú: el Doble Oportunidad (1X) es el mercado estrella (68%).
+    // Módulo AFA: Liga muy propensa al empate, bajamos umbral a 70% (Parity Filter).
+    const isAFA = leagueName.toLowerCase().includes('argentina');
+    let threshold1X = isLiga1Peru ? 68 : (isAFA ? 70 : 75);
+    // Si hay boost de supervivencia fuerte, bajamos el umbral porque Poisson
+    // castiga demasiado al colero basándose en stats del gigante antes de estar "de vacaciones".
+    if (survivalBoost1X >= 30) {
+      threshold1X = 45; // Apuesta táctica pura (ignora la baja prob de Poisson)
+    } else if (survivalBoost1X >= 25) {
+      threshold1X = 60; 
+    } else if (survivalBoost1X > 0) {
+      threshold1X = 65;
+    }
+
+    // Si hay boost de supervivencia, somos más tolerantes con el poisson local bruto
+    const poissonThreshold = survivalBoost1X > 0 ? 80 : 70;
+
+    if (combined1X >= threshold1X && poissonProbs.home < poissonThreshold) {
+      const afaNote = isAFA ? `[🛡️ AFA Parity] ` : '';
+      const survivalNote = survivalBoost1X > 0 ? `🔥 Efecto Supervivencia (+${survivalBoost1X}%). ` : '';
       addPick({
         market: 'Doble Oportunidad',
         selection: 'Local o Empate (1X)',
         probability: Math.min(combined1X, 86),
         tier: '🔵',
-        argument: `Poisson: Local ${poissonProbs.home.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}% = ${prob1X}% de 1X. H2H 1X: ${h2hBase1X}%. Protección ante el empate.`,
+        argument: `${afaNote}${survivalNote}Poisson: Local ${poissonProbs.home.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}%. Protección ante jerarquía visitante relajada.`,
         risk: 'Bajo',
         units: '3-4u',
       });
@@ -876,14 +1702,21 @@ export function generatePicks({
 
     const probX2 = Math.round(poissonProbs.away + poissonProbs.draw);
     const h2hBaseX2 = h2hData ? (h2hData.awayWinPct + h2hData.drawPct) : probX2;
-    const combinedX2 = Math.round(probX2 * 0.6 + h2hBaseX2 * 0.4);
-    if (combinedX2 >= 75 && poissonProbs.away < 70) {
+    let combinedX2 = Math.round(probX2 * 0.6 + h2hBaseX2 * 0.4) + survivalBoostX2;
+    // X2 en AFA usa umbral estándar (75%): el visitante en Argentina es muy volátil.
+    const thresholdX2 = 75;
+    
+    const poissonX2Threshold = survivalBoostX2 > 0 ? 80 : 70;
+
+    if (combinedX2 >= thresholdX2 && poissonProbs.away < poissonX2Threshold) {
+      const afaNote = isAFA ? `[🛡️ AFA Parity] ` : '';
+      const survivalNote = survivalBoostX2 > 0 ? `🔥 Efecto Supervivencia (+${survivalBoostX2}%). ` : '';
       addPick({
         market: 'Doble Oportunidad',
         selection: 'Visitante o Empate (X2)',
         probability: Math.min(combinedX2, 86),
         tier: '🔵',
-        argument: `Poisson: Visitante ${poissonProbs.away.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}% = ${probX2}% de X2. H2H X2: ${h2hBaseX2}%. Protección ante el empate.`,
+        argument: `${afaNote}${survivalNote}Poisson: Visitante ${poissonProbs.away.toFixed(1)}% + Empate ${poissonProbs.draw.toFixed(1)}%. Protección ante local relajado.`,
         risk: 'Bajo',
         units: '3-4u',
       });
@@ -940,7 +1773,7 @@ export function generatePicks({
       addPick({
         market: 'Córners Totales',
         selection: 'Más de 8.5 córners',
-        probability: Math.min(over8Pct, 84),
+        probability: Math.min(over8Pct, 88),
         tier: over8Pct >= 75 ? '🔵' : '🟡',
         argument: `Promedio combinado de córners: ${combinedAvgCorners.toFixed(1)}/p. Local: ${homeCornersData.avg}/p · Visitante: ${awayCornersData.avg}/p. El ${over8Pct}% de sus partidos superan esta línea.`,
         risk: over8Pct >= 75 ? 'Moderado' : 'Alto',
@@ -950,7 +1783,7 @@ export function generatePicks({
       addPick({
         market: 'Córners Totales',
         selection: 'Más de 10.5 córners',
-        probability: Math.min(over10Pct, 80),
+        probability: Math.min(over10Pct, 86),
         tier: '🟡',
         argument: `${over10Pct}% de partidos con 11+ córners combinados. Promedio: ${combinedAvgCorners.toFixed(1)}/p.`,
         risk: 'Alto',
@@ -958,20 +1791,113 @@ export function generatePicks({
     }
   }
 
-  // ── Tarjetas del partido (ambos equipos) ────────────────────────
+  // ── Tarjetas del partido (ambos equipos + Árbitro) ──────────────
   if (homeCardsData && awayCardsData && homeCardsData.matches >= 4 && awayCardsData.matches >= 4) {
-    const combinedAvgCards = parseFloat(homeCardsData.avg) + parseFloat(awayCardsData.avg);
-    const over3CardsPct = Math.round(
+    let combinedAvgCards = parseFloat(homeCardsData.avg) + parseFloat(awayCardsData.avg);
+    let overCardsPct = Math.round(
       ((homeCardsData.over2 / homeCardsData.matches) * 0.5 +
        (awayCardsData.over2 / awayCardsData.matches) * 0.5) * 100
     );
-    if (over3CardsPct >= 60 && combinedAvgCards >= 3) {
+
+    let targetCards = 3.5;
+    let minPct = 60;
+    let tensionNote = '';
+    let refereeNote = '';
+
+    // Ajuste por Árbitro (Nivel Institucional)
+    if (refereeStats && refereeStats.matches > 0) {
+      const refAvg = refereeStats.avgYellow + refereeStats.avgRed;
+      const refBias = refAvg - 5.0; // Asumimos 5.0 como media de liga
+      if (refBias >= 1.0) { // Árbitro muy tarjetero
+        overCardsPct = Math.min(overCardsPct + 15, 95);
+        targetCards = 4.5;
+        refereeNote = `⚖️ Árbitro riguroso (${refereeStats.name}): Promedia ${refAvg.toFixed(1)} tarjetas por partido.`;
+      } else if (refBias <= -1.0) { // Árbitro muy permisivo
+        overCardsPct = Math.max(overCardsPct - 15, 0);
+        refereeNote = `⚖️ Árbitro permisivo (${refereeStats.name}): Solo promedia ${refAvg.toFixed(1)} tarjetas.`;
+      } else {
+        refereeNote = `⚖️ Árbitro (${refereeStats.name}): ${refAvg.toFixed(1)} tarjetas (Promedio neutro).`;
+      }
+    }
+
+    // Liga 1 Perú: Ajuste para Clásicos de Provincia o Pelea por el Descenso
+    if (isLiga1Peru) {
+      const isRelegationFight = matchStandings && matchStandings.total >= 10 && 
+        (matchStandings.homeRank >= matchStandings.total - 4 || matchStandings.awayRank >= matchStandings.total - 4);
+      
+      if (isDerby || isRelegationFight) {
+        overCardsPct = Math.min(overCardsPct + 20, 90); // Boost masivo de probabilidad
+        targetCards = 4.5; // Elevamos la línea porque en Perú estos partidos promedian 6+ tarjetas
+        minPct = 55;
+        tensionNote = isDerby ? '🔥 Clásico de alta fricción.' : '🔥 Partido de vida o muerte (descenso).';
+      }
+    }
+
+    // ── LaLiga España: VAR estricto + descenso = muchas tarjetas ────
+    // En España el VAR interviene más que en cualquier otra liga Top 5.
+    // En partidos de descenso de final de temporada esto se dispara.
+    if (isLaLiga) {
+      const isLaLigaRelegFight = matchStandings && matchStandings.total >= 18 &&
+        (matchStandings.homeRank >= matchStandings.total - 4 || matchStandings.awayRank >= matchStandings.total - 4);
+      if (isLaLigaRelegFight || isDerby) {
+        overCardsPct = Math.min(overCardsPct + 15, 90);
+        targetCards  = 4.5;
+        minPct       = 58;
+        tensionNote  = isLaLigaRelegFight
+          ? '🇪🇸 VAR + Descenso LaLiga: nerviosismo extremo, tarjetazo seguro.'
+          : '🇪🇸 Derbi LaLiga con VAR activo.';
+      } else {
+        // LaLiga estándar: el VAR ya genera una tarjeta extra de media vs otras ligas
+        overCardsPct = Math.min(overCardsPct + 6, 90);
+        tensionNote  = '🇪🇸 LaLiga: VAR estricto eleva media de tarjetas.';
+      }
+    }
+
+    if (overCardsPct >= minPct && combinedAvgCards >= 3) {
       addPick({
         market: 'Tarjetas Totales',
-        selection: 'Más de 3.5 tarjetas',
-        probability: Math.min(over3CardsPct, 82),
-        tier: over3CardsPct >= 72 ? '🔵' : '🟡',
-        argument: `Promedio combinado de tarjetas: ${combinedAvgCards.toFixed(1)}/p. El ${over3CardsPct}% de sus partidos registran 4+ tarjetas.`,
+        selection: `Más de ${targetCards} tarjetas`,
+        probability: Math.min(overCardsPct, 88),
+        tier: overCardsPct >= 75 ? '🔵' : '🟡',
+        argument: `Promedio combinado: ${combinedAvgCards.toFixed(1)}/p. ${tensionNote} ${refereeNote}`,
+        risk: targetCards > 3.5 ? 'Alto' : 'Moderado',
+      });
+    }
+  }
+
+  // ── Remates al Arco (Shots on Target) ──────────────────────────
+  if (homeShotsData && awayShotsData && homeShotsData.matches >= 4 && awayShotsData.matches >= 4) {
+    const combinedAvgShots = parseFloat(homeShotsData.avg) + parseFloat(awayShotsData.avg);
+    const overShotsPct = Math.round(
+      ((homeShotsData.over4 / homeShotsData.matches) * 0.5 +
+       (awayShotsData.over4 / awayShotsData.matches) * 0.5) * 100
+    );
+    if (overShotsPct >= 65 && combinedAvgShots >= 8.5) {
+      addPick({
+        market: 'Remates al Arco',
+        selection: 'Más de 8.5 remates al arco',
+        probability: Math.min(overShotsPct, 88),
+        tier: '🔵',
+        argument: `Promedio combinado: ${combinedAvgShots.toFixed(1)}/p. Ambos equipos generan muchas ocasiones directas a portería.`,
+        risk: 'Moderado',
+      });
+    }
+  }
+
+  // ── Faltas Cometidas (Fouls) ───────────────────────────────────
+  if (homeFoulsData && awayFoulsData && homeFoulsData.matches >= 4 && awayFoulsData.matches >= 4) {
+    const combinedAvgFouls = parseFloat(homeFoulsData.avg) + parseFloat(awayFoulsData.avg);
+    const overFoulsPct = Math.round(
+      ((homeFoulsData.over11 / homeFoulsData.matches) * 0.5 +
+       (awayFoulsData.over11 / awayFoulsData.matches) * 0.5) * 100
+    );
+    if (overFoulsPct >= 65 && combinedAvgFouls >= 22.5) {
+      addPick({
+        market: 'Faltas Totales',
+        selection: 'Más de 22.5 faltas',
+        probability: Math.min(overFoulsPct, 86),
+        tier: '🟡',
+        argument: `Promedio combinado: ${combinedAvgFouls.toFixed(1)}/p. Historial de mucha fricción e interrupciones.`,
         risk: 'Moderado',
       });
     }
@@ -999,8 +1925,197 @@ export function generatePicks({
     }
   }
 
-  // Filtro: picks con tier definido y probabilidad >= umbral dinámico por muestra
-  let filtered = picks.filter(p => p.tier && p.probability >= dynamicMinProb);
+  // ── MÓDULO DE MOTIVACIÓN Y CONTEXTO ──────────────────────────
+  let isDeadRubber = false;
+  let isRelegationBattle = false; // Ambos pelean descenso
+  let survivalBoostHome = false;  // Solo local pelea descenso, visitante relajado
+  let survivalBoostAway = false;  // Solo visitante pelea descenso, local relajado
+
+  if (matchStandings && matchStandings.total >= 10) {
+     const tot = matchStandings.total;
+     const midTableStart = Math.floor(tot * 0.35);
+     const midTableEnd = tot - 5;
+     
+     const homeInMid = matchStandings.homeRank >= midTableStart && matchStandings.homeRank <= midTableEnd;
+     const awayInMid = matchStandings.awayRank >= midTableStart && matchStandings.awayRank <= midTableEnd;
+     
+     // Bloqueamos la detección de descenso para ligas cerradas (como la MLS)
+     const hasRelegationSystem = !isMLS;
+     const homeInRelegation = hasRelegationSystem && matchStandings.homeRank >= tot - 4; // Últimos 5
+     const awayInRelegation = hasRelegationSystem && matchStandings.awayRank >= tot - 4; // Últimos 5
+
+     if (homeInMid && awayInMid) {
+         isDeadRubber = true;
+     }
+
+     // 🚨 MODO DESCENSO: Ambos en el sótano (Duelo de Miedo)
+     if (homeInRelegation && awayInRelegation) {
+         isRelegationBattle = true;
+         if (!isLive && combinedUnder25 >= 60) {
+            addPick({
+              market: 'Total de Goles',
+              selection: 'Menos de 2.5 goles',
+              probability: Math.min(combinedUnder25 + 15, 85),
+              tier: '🟡',
+              argument: `[🚨 Duelo de Miedo] Ambos equipos pelean el descenso directo. Históricamente, estos choques generan un "bloque bajo" por miedo a perder. Expectativa de partido muy táctico y cerrado.`,
+              risk: 'Moderado',
+              units: '2-3u'
+            });
+         }
+     } 
+     // 🚨 SURVIVAL BOOST: Uno pelea descenso y el otro no se juega nada
+     else if (homeInRelegation && awayInMid) {
+         survivalBoostHome = true;
+         const baseProb = poissonProbs ? Math.round(poissonProbs.home + poissonProbs.draw) : 65;
+         if (!isLive && baseProb >= 60) {
+            addPick({
+              market: 'Doble Oportunidad',
+              selection: 'Local o Empate (1X)',
+              probability: Math.min(baseProb + 15, 86),
+              tier: '🔵',
+              argument: `[🔥 Survival Boost] El local se juega la permanencia ante un visitante acomodado en mitad de tabla. La urgencia extrema favorece la protección del 1X.`,
+              risk: 'Bajo',
+              units: '3-4u'
+            });
+         }
+     } else if (awayInRelegation && homeInMid) {
+         survivalBoostAway = true;
+         const baseProb = poissonProbs ? Math.round(poissonProbs.away + poissonProbs.draw) : 65;
+         if (!isLive && baseProb >= 60) {
+            addPick({
+              market: 'Doble Oportunidad',
+              selection: 'Visitante o Empate (X2)',
+              probability: Math.min(baseProb + 15, 86),
+              tier: '🔵',
+              argument: `[🔥 Survival Boost] El visitante se juega la vida por no descender ante un local relajado. La necesidad crítica de sumar activa el X2.`,
+              risk: 'Bajo',
+              units: '3-4u'
+            });
+         }
+     }
+  }
+
+  // Filtro: picks con tier definido y probabilidad >= umbrales inteligentes
+  let filtered = picks.filter(p => {
+    if (!p.tier) return false;
+    
+    // Filtro Apagón (Blackout Filter)
+    const isPremier = leagueName.toLowerCase().includes('premier');
+    const isGoalMarket = p.market === 'Total de Goles' || p.market === 'Ambos Marcan' || p.market === 'Combo';
+    
+    if (isPremier && isGoalMarket) {
+      return false; // Bloqueo total
+    }
+
+    // ── MÓDULO ARABIA SAUDÍ (Saudi Pro League) ──────────────────────
+    // En esta liga, los 4 Grandes tienen una ventaja tan brutal sobre el
+    // resto que el sistema puede ser más agresivo (82% en lugar de 88%).
+    const isSaudi = leagueName.toLowerCase().includes('saudi') || leagueName.toLowerCase().includes('arabia');
+    const SAUDI_BIG4 = ['Al-Hilal', 'Al Hilal', 'Al-Nassr', 'Al Nassr', 'Al-Ahli', 'Al Ahli', 'Al-Ittihad', 'Al Ittihad'];
+    const homeIsBig4 = SAUDI_BIG4.some(t => homeTeamName?.includes(t));
+    const awayIsBig4 = SAUDI_BIG4.some(t => awayTeamName?.includes(t));
+    const isBig4Match = isSaudi && (homeIsBig4 || awayIsBig4);
+
+    // Poda de Ganador Directo (1X2)
+    if (p.market === 'Ganador del Partido' || p.market === 'Handicap Asiático') {
+      // FILTRO ACL: Si el equipo favorito (el que generó el pick) está en riesgo
+      // de rotación por congestión ACL, bloqueamos Ganador/Hándicap sin importar la prob.
+      const favorsHome = p.selection.includes('Local') || p.selection.includes('Local');
+      const favorsAway = p.selection.includes('Visitante');
+      if (isSaudi) {
+        if (favorsHome && homeACL.isAtRisk) return false; // 🚫 Local Big4 en rotación
+        if (favorsAway && awayACL.isAtRisk) return false;  // 🚫 Visitante Big4 en rotación
+      }
+      // Umbral normal de probabilidad
+      const threshold = isBig4Match ? 82 : 88;
+      if (p.probability < threshold) return false;
+    }
+
+    // ── MÓDULO AFA (Liga Profesional Argentina) ──────────────────────
+    const isAFA = leagueName.toLowerCase().includes('argentina');
+    
+    // Limpieza de Mercados Secundarios en AFA
+    if (isAFA && ['Córners Totales', 'Faltas Totales'].includes(p.market)) {
+      return false; // ESPN no provee data consistente para AFA
+    }
+
+    // Penalización "Gigante en Crisis" (Boca/River como visitantes)
+    if (isAFA && p.market === 'Ganador del Partido') {
+      const AFA_GIANTS = ['Boca Juniors', 'River Plate'];
+      const awayIsGiant = AFA_GIANTS.some(t => awayTeamName?.includes(t));
+      if (awayIsGiant && p.selection.includes('Visitante') && advancedStats?.away?.xG < 1.2) {
+        p.probability -= 10; // Penalización del 10%
+        p.argument = `[⚠️ MODO AFA] ${p.argument} (El gigante visitante llega en mala forma ofensiva, cuota posiblemente inflada).`;
+      }
+    }
+
+    // ── MÓDULO LaLiga (España) ──────────────────────────────────────
+    if (isLaLiga) {
+      // 1) Bloquear Faltas: ESPN no es consistente en LaLiga
+      if (p.market === 'Faltas Totales') return false;
+
+      // 2) Penalización "Gran Equipo de Visita": Real Madrid/Barça/Atleti
+      //    visitando a un equipo de descenso generan MIEDO DEFENSIVO en el rival.
+      //    Eso cierra el partido → Victoria directa del grande es menos probable
+      //    que un Doble Oportunidad. Bloqueamos 'Victoria Visitante' pura si hay
+      //    descenso en juego y el grande visita.
+      if (awayIsLaLigaGiant && laLigaRelegationZone && p.market === 'Ganador del Partido' && p.selection.includes('Visitante')) {
+        // No bloqueamos, pero añadimos advertencia y bajamos probabilidad
+        p.probability = Math.max(p.probability - 8, 60);
+        p.argument = `[🇪🇸 LaLiga] ${p.argument} (⚠️ Rival en descenso juega cerrado ante grande — riesgo de partido tenso y a la contra).`;
+      }
+
+      // 3) Over 2.5 bloqueado si es partido de descenso en LaLiga
+      //    (estos partidos raramente superan 2 goles — media histórica ~1.8 en ZD)
+      if (laLigaRelegationZone && p.selection === 'Más de 2.5 goles') return false;
+
+      // 4) Boost argumental para picks de Under en contexto de descenso
+      if (laLigaRelegationZone && p.selection.includes('Menos de') && !p.argument.includes('[🇪🇸')) {
+        p.argument = `[🇪🇸 LaLiga · Fin Temporada] ${p.argument}`;
+      }
+    }
+
+    // Umbrales Inteligentes por Mercado
+    let requiredProb;
+    if (p.market === 'Doble Oportunidad') {
+      // Si el pick viene marcado con Efecto Supervivencia, ya pasó por un
+      // umbral tácticamente reducido en la fase de generación — no lo bloqueamos de nuevo.
+      const hasSurvivalBoost = p.argument && p.argument.includes('Efecto Supervivencia');
+      if (hasSurvivalBoost) {
+        requiredProb = 40; // Apuesta táctica pura, el umbral ya fue validado arriba
+      } else {
+        // LaLiga fin de temporada: Doble Oportunidad es el mercado más fiable (muchos empates y partidos cerrados)
+        requiredProb = isLaLiga ? 70 : (isAFA ? 70 : (isDeadRubber ? 82 : 75));
+      }
+    } else if (['Córners Totales', 'Tarjetas Totales', 'Remates al Arco', 'Faltas Totales'].includes(p.market)) {
+      requiredProb = isDeadRubber ? 80 : 75;
+    } else if (isGoalMarket && isSaudi) {
+      // En Arabia liberamos los goles SOLO para el Big 4 (partidos espectáculo)
+      const involvesBig4 = homeIsBig4 || awayIsBig4;
+      requiredProb = (isDeadRubber || isRelegationBattle) ? 80 : (involvesBig4 ? 72 : 78);
+    } else if (isGoalMarket && isLaLiga) {
+      // LaLiga: Under 2.5 es más fiable que el Over → umbral asimétrico
+      if (p.selection.includes('Menos de')) {
+        // En zona de descenso, la evidencia estadística es más fuerte → bajamos umbral
+        requiredProb = laLigaRelegationZone ? 72 : 75;
+      } else {
+        // Over en LaLiga es más difícil → umbral más alto
+        requiredProb = laLigaRelegationZone ? 85 : 80;
+      }
+    } else if (isAFA && p.selection === 'Menos de 2.5 goles') {
+      // Agresividad en Under 2.5 para AFA si hay buena defensa
+      const bothDefensesGood = homeAvgGA < 1.1 && awayAvgGA < 1.1;
+      requiredProb = bothDefensesGood ? 75 : 82;
+      if (bothDefensesGood && p.probability >= requiredProb && !p.argument.includes('[🛡️ MODO AFA]')) {
+         p.argument = `[🛡️ MODO AFA] ${p.argument} (Liga de baja anotación y ambas defensas sólidas).`;
+      }
+    } else {
+      // Goles, Ganador 1X2, Handicap (mercados volátiles — regla general)
+      requiredProb = isDeadRubber ? 88 : Math.max(80, dynamicMinProb);
+    }
+    
+    return p.probability >= requiredProb;
+  });
 
   // ── FILTRO ANTI-CLÁSICOS (SNIPER MODE) ────────────────────────
   // Bypass si ambos equipos son máquinas ofensivas en el momento (para evitar falsos Under en derbis rotos)
@@ -1031,6 +2146,57 @@ export function generatePicks({
     }
   }
 
+  // ── MODO DESCENSO (RELEGATION BATTLE) ──────────────────────
+  // En peleas por el descenso de final de temporada, el miedo a perder domina.
+  if (isRelegationBattle && !isLive) {
+    // Bloquear picks especulativos ofensivos (Overs y Ambos Anotan)
+    filtered = filtered.filter(p => {
+       if (p.selection.includes('Más de') || p.selection === 'Ambos Anotan: Sí') return false;
+       return true;
+    });
+
+    // Inyectar el pick seguro de Under 3.5 si no existe ya
+    const hasUnder35 = filtered.some(p => p.selection === 'Menos de 3.5 goles');
+    if (!hasUnder35) {
+      filtered.push({
+        market: 'Total de Goles',
+        selection: 'Menos de 3.5 goles',
+        probability: 85,
+        tier: '🟢',
+        argument: `[📉 MODO DESCENSO] Duelo directo por la permanencia. Ambos equipos priorizarán no cometer errores antes que atacar. Se espera un trámite muy cerrado.`,
+        risk: 'Bajo',
+      });
+    }
+
+    // Inyectar nota de cautela en los picks restantes
+    filtered.forEach(p => {
+      if (!p.argument.includes('[📉 MODO DESCENSO]')) {
+        p.argument = `[📉 MODO DESCENSO] ${p.argument} (Partido de alta tensión por el descenso).`;
+      }
+    });
+  }
+
+  // ── MODO SNIPER (ELITE FILTER) ───────────────────────────────
+  // Identifica los picks que tienen el potencial de alcanzar el 90% de acierto.
+  // Son selecciones donde la probabilidad matemática y el contexto coinciden plenamente.
+  filtered = filtered.map(p => {
+    const isBig3Dominance = isLiga1Peru && (homeEffectiveScore >= 82 || awayEffectiveScore >= 82);
+    const isExtremeAltitudeWin = isLiga1Peru && altitudeRisk === 'high' && p.selection.includes('Local');
+    
+    // Un pick es ELITE si tiene prob >= 88% o es un caso de dominación absoluta en Liga 1
+    const isElite = p.probability >= 88 || (isLiga1Peru && p.probability >= 84 && (isBig3Dominance || isExtremeAltitudeWin));
+    
+    if (isElite) {
+      return {
+        ...p,
+        tier: '💎',
+        argument: `[🎯 SNIPER] ${p.argument}`,
+        risk: 'Bajo' // Los picks Sniper siempre se consideran de riesgo bajo por su alta probabilidad
+      };
+    }
+    return p;
+  });
+
   filtered.sort((a, b) => b.probability - a.probability);
 
   // ── Límite: máximo 5 picks para no saturar al usuario ─────────
@@ -1051,6 +2217,17 @@ export function generatePicks({
     combinedBTTS,
     homeFormAtHome,
     awayFormAway,
+    // ── Datos Elo + Dixon-Coles (para UI y diagnóstico) ──────────
+    eloCombined,   // { home, draw, away, over15, over25, over35, btts, lambdaHome, lambdaAway, _elo, _dc, _top5Scores }
+    // ── Fase 1: Expectativa Pitagórica + Volatilidad ─────────────
+    pythag: {
+      home: homePythag,   // { pythagWinPct, actualWinPct, delta, overPerforming, underPerforming, label, adjustment }
+      away: awayPythag,
+    },
+    volatility: {
+      home: homeVolatility,  // { volatility, label, daysSinceLastGame, inconsistencyScore, trustPenalty, isHighVolatility }
+      away: awayVolatility,
+    },
     reason: finalPicks.length === 0 ? 'No se encontró ventaja estadística clara. No se recomienda apostar.' : null,
   };
 }
@@ -1075,9 +2252,12 @@ export function poissonProb(lambda, k) {
   return Math.pow(Math.E, -lambda) * Math.pow(lambda, k) / factorial;
 }
 
-export function calcMatchProbabilities(homeAvgGF, homeAvgGA, awayAvgGF, awayAvgGA) {
-  const lambdaHome = (homeAvgGF + awayAvgGA) / 2;
-  const lambdaAway = (awayAvgGF + homeAvgGA) / 2;
+export function calcMatchProbabilities(homeAvgGF, homeAvgGA, awayAvgGF, awayAvgGA, leagueName = '') {
+  const isSaudi = /saudi|arabia/i.test(leagueName);
+  const isLaLiga = /laliga|la liga|spain|españa|esp\.1/i.test(leagueName);
+  const leagueAvg = isSaudi ? 1.48 : isLaLiga ? 1.18 : 1.3;
+  const lambdaHome = (homeAvgGF * awayAvgGA) / leagueAvg;
+  const lambdaAway = (awayAvgGF * homeAvgGA) / leagueAvg;
 
   let homeWin = 0, draw = 0, awayWin = 0;
   for (let h = 0; h <= 6; h++) {
@@ -1096,5 +2276,64 @@ export function calcMatchProbabilities(homeAvgGF, homeAvgGA, awayAvgGF, awayAvgG
     away: +(awayWin / total * 100).toFixed(1),
     lambdaHome: +lambdaHome.toFixed(2),
     lambdaAway: +lambdaAway.toFixed(2),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  FASE 2: BRIER SCORE (Auditoría de Precisión)
+//  Mide la exactitud del motor predictivo comparando la probabilidad
+//  proyectada contra el resultado real (1 = acertó, 0 = falló).
+//  Un Brier Score de 0 es perfecto. 0.25 es adivinar al azar.
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Calcula el Brier Score para un conjunto de predicciones pasadas.
+ * 
+ * @param {Array<{ probability: number, result: number }>} predictions 
+ *        probability: Probabilidad en formato 0-100 dada por el motor
+ *        result: 1 si el evento sucedió (acierto), 0 si no sucedió (fallo)
+ * @returns {{ brierScore: number, label: string, isAccurate: boolean }}
+ */
+export function calcBrierScore(predictions) {
+  if (!predictions || predictions.length === 0) {
+    return { brierScore: null, label: 'Sin suficientes datos', isAccurate: false };
+  }
+
+  let sumOfSquares = 0;
+  let validCount = 0;
+
+  predictions.forEach(p => {
+    if (typeof p.probability !== 'number' || typeof p.result !== 'number') return;
+    
+    // Normalizar probabilidad de 0-100 a 0-1
+    const probObj = p.probability > 1 ? p.probability / 100 : p.probability;
+    // Resultado debe ser estrictamente 0 o 1
+    const outcome = p.result > 0 ? 1 : 0; 
+    
+    sumOfSquares += Math.pow(probObj - outcome, 2);
+    validCount++;
+  });
+
+  if (validCount === 0) return { brierScore: null, label: 'Sin datos válidos', isAccurate: false };
+
+  const brierScore = sumOfSquares / validCount;
+  
+  // Evaluación del Brier Score:
+  // < 0.15 = Nivel Institucional Excelente
+  // < 0.20 = Muy bueno
+  // < 0.25 = Promedio (Margen del corredor)
+  // > 0.25 = Peor que lanzar una moneda
+  
+  const isAccurate = brierScore <= 0.22;
+  const label = brierScore <= 0.15 ? '🟢 Nivel Sniper Institucional' 
+              : brierScore <= 0.20 ? '🟢 Altamente preciso'
+              : brierScore <= 0.24 ? '🟡 Aceptable / Promedio'
+              : '🔴 Impreciso (Requiere re-calibración)';
+
+  return {
+    brierScore: +brierScore.toFixed(3),
+    label,
+    isAccurate,
+    sampleSize: validCount
   };
 }

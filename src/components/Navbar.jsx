@@ -39,30 +39,30 @@ export default function Navbar() {
 
   return (
     <header className="nav-header sticky top-0 z-50 backdrop-blur-xl border-b">
-      <div className="max-w-screen-2xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
+      <div className="max-w-screen-2xl mx-auto px-8 h-20 flex items-center justify-between gap-4">
 
         {/* ── Brand ── */}
         <Link to="/" className="flex items-center gap-3 select-none group">
-          <div className="nav-brand-icon w-8 h-8 rounded-lg flex items-center justify-center transition-transform duration-300 group-hover:scale-110">
-            <Zap size={15} strokeWidth={2.5} />
+          <div className="nav-brand-icon w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-105">
+            <Zap size={20} strokeWidth={2.5} />
           </div>
           <div className="leading-none">
-            <p className="nav-brand-text text-sm font-black tracking-tight uppercase leading-none">Tio Chalaca</p>
-            <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Analytics</p>
+            <p className="nav-brand-text text-lg font-black tracking-tight uppercase leading-none">Tio Chalaca</p>
+            <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest mt-1">Analytics</p>
           </div>
         </Link>
 
         {/* ── Nav Desktop ── */}
-        <nav className="hidden md:flex items-center gap-2">
+        <nav className="hidden md:flex items-center gap-1">
           {MAIN_NAV.map(({ to, icon: Icon, label }) => {
             const active = isActive(to);
             return (
               <Link
                 key={to}
                 to={to}
-                className={`nav-link ${active ? 'active' : ''} flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold transition-all duration-200`}
+                className={`nav-link ${active ? 'active' : ''} flex items-center gap-2.5 px-3 py-3 rounded-xl text-[20px] font-semibold transition-all duration-200`}
               >
-                <Icon size={14} strokeWidth={active ? 2.5 : 2} />
+                <Icon size={20} strokeWidth={active ? 2.5 : 2} />
                 {label}
               </Link>
             );
@@ -74,33 +74,33 @@ export default function Navbar() {
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenuOpen(v => !v)}
-              className={`nav-user-btn ${menuOpen ? 'open' : ''} flex items-center gap-3 px-3 py-2 rounded-xl border transition-all duration-200`}
+              className={`nav-user-btn ${menuOpen ? 'open' : ''} flex items-center gap-3 px-4 py-2.5 rounded-xl border transition-all duration-200`}
             >
               {user.avatar_url ? (
-                <img src={user.avatar_url} alt="" className="w-6 h-6 rounded-full grayscale" />
+                <img src={user.avatar_url} alt="" className="w-9 h-9 rounded-full grayscale" />
               ) : (
-                <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold text-white uppercase">
+                <div className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center text-[13px] font-bold text-white uppercase">
                   {user.username?.[0] || '?'}
                 </div>
               )}
-              <span className="hidden sm:block text-[12px] font-bold text-slate-200 uppercase tracking-wider">
+              <span className="hidden sm:block text-[14px] font-bold text-slate-200 uppercase tracking-wider">
                 {user.username}
               </span>
-              <ChevronDown size={12} className={`text-slate-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown size={16} className={`text-slate-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {menuOpen && (
-              <div className="nav-dropdown absolute right-0 top-[calc(100%+12px)] w-56 border rounded-2xl overflow-hidden shadow-2xl animate-in">
-                <div className="nav-dropdown-header px-4 py-4 border-b">
-                  <p className="text-[11px] font-black uppercase tracking-widest text-slate-500">Cuenta</p>
-                  <p className="text-sm font-bold nav-brand-text mt-1 truncate">{user.username}</p>
+              <div className="nav-dropdown absolute right-0 top-[calc(100%+12px)] w-64 border rounded-2xl overflow-hidden shadow-2xl animate-in">
+                <div className="nav-dropdown-header px-5 py-5 border-b">
+                  <p className="text-[12px] font-black uppercase tracking-widest text-slate-500">Cuenta</p>
+                  <p className="text-base font-bold nav-brand-text mt-1 truncate">{user.username}</p>
                 </div>
                 <div className="p-2 space-y-1">
-                  <Link to="/settings" className="nav-dropdown-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] transition-colors">
-                    <Settings size={14} /> Ajustes
+                  <Link to="/settings" className="nav-dropdown-link flex items-center gap-3 px-4 py-3 rounded-xl text-[14px] transition-colors">
+                    <Settings size={16} /> Ajustes
                   </Link>
-                  <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] text-red-500 hover:bg-red-500/5 transition-colors">
-                    <LogOut size={14} /> Salir
+                  <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[14px] text-red-500 hover:bg-red-500/5 transition-colors">
+                    <LogOut size={16} /> Salir
                   </button>
                 </div>
               </div>

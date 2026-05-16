@@ -3,6 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const http = require('http');
 const https = require('https');
+const bsdAdapter = require('../src/services/bsdAdapter.cjs');
 
 // Persistent agents for keep-alive
 const httpAgent = new http.Agent({ keepAlive: true });
@@ -122,6 +123,7 @@ const ALLOWED_LEAGUES = {
   'uefa.champions': 'Champions League',
   'uefa.europa': 'Europa League',
   'uefa.europa.conf': 'Conference League',
+  'fifa.world': 'Copa del Mundo',
 };
 
 function mapLeagueInfo(leagueInfo, fixture) {
@@ -219,10 +221,12 @@ async function getLiveFixtures() {
 // ANÁLISIS PROFUNDO (Para reemplazar a API-Football en el motor de predicciones)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function getMatchSummary(eventId) {
+async function getMatchSummary(eventId, refresh = false) {
   const cacheKey = `espn_summary_${eventId}`;
-  const cached = cacheGet(cacheKey);
-  if (cached) return cached;
+  if (!refresh) {
+    const cached = cacheGet(cacheKey);
+    if (cached) return cached;
+  }
 
   try {
     const res = await axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${eventId}&t=${Date.now()}`);
@@ -400,6 +404,36 @@ async function getEnrichedSummary(eventId) {
     }
   }
 
+  // --- VARIABLES COMUNES PARA BSD ---
+  let espnLeagueSlug = raw.header?.season?.slug || raw.header?.league?.slug;
+  if (!espnLeagueSlug && raw.header?.links?.[0]?.href) {
+    const match = raw.header.links[0].href.match(/league\/([^\/]+)/);
+    if (match) espnLeagueSlug = match[1];
+  }
+  
+  const matchDate = comp?.date || raw.header?.competitions?.[0]?.date;
+  const homeName = homeComp?.team?.displayName ?? homeBs?.team?.displayName;
+  const awayName = awayComp?.team?.displayName ?? awayBs?.team?.displayName;
+
+  // --- BSD FALLBACK PARA CUOTAS ---
+  // Si ESPN no entregó cuotas (Pickcenter vacío o no cargó), consultamos BSD
+  if (!marketOdds) {
+    if (espnLeagueSlug && matchDate && homeName && awayName) {
+      const bsdOdds = await bsdAdapter.getBSDOdds(espnLeagueSlug, matchDate, homeName, awayName);
+      if (bsdOdds) {
+        marketOdds = bsdOdds;
+        console.log(`[bsdAdapter] Recuperadas cuotas de consenso de BSD para ${homeName} vs ${awayName}`);
+      }
+    }
+  }
+  
+  // --- BSD FALLBACK PARA ALINEACIONES ---
+  // Podemos inyectar las lineups confirmadas de BSD si es necesario
+  let bsdLineupsObj = null;
+  if (espnLeagueSlug && matchDate && homeName && awayName) {
+      bsdLineupsObj = await bsdAdapter.getBSDLineups(espnLeagueSlug, matchDate, homeName, awayName);
+  }
+
   // Árbitro, venue, asistencia
   const venue      = raw.gameInfo?.venue?.fullName ?? raw.gameInfo?.venue?.name ?? null;
   const city       = raw.gameInfo?.venue?.address?.city ?? null;
@@ -475,6 +509,7 @@ async function getEnrichedSummary(eventId) {
     plays:      raw.plays,
     gameInfo:   raw.gameInfo,
     rosters:    raw.rosters,
+    bsdLineups: bsdLineupsObj, // Alineaciones confirmadas de BSD
   };
 }
 

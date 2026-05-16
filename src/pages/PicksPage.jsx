@@ -7,9 +7,11 @@ import PendingWall from '../components/PendingWall';
 import { getDbPicks, updateDbPick, deleteDbPick, clearAllDbPicks } from '../services/backendApi';
 
 function ProbBadge({ prob }) {
-  const color = prob >= 85 ? '#00ff88' : '#1e90ff';
+  const colorClass = prob >= 85 ? 'text-accent-green' : 'text-blue-400';
   return (
-    <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/5" style={{ color }}>{prob}%</span>
+    <span className={`text-[10px] font-bold font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/5 ${colorClass}`}>
+      {prob}%
+    </span>
   );
 }
 
@@ -162,17 +164,18 @@ export default function PicksPage() {
 
       {/* Racha actual */}
       {stats.currentStreak > 1 && (
-        <div className="glass-card p-4 flex items-center gap-4"
-          style={{
-            borderColor: stats.currentStreakType === 'WON' ? 'rgba(0,255,136,0.2)' : 'rgba(255,71,87,0.2)',
-            background: stats.currentStreakType === 'WON' ? 'rgba(0,255,136,0.04)' : 'rgba(255,71,87,0.04)',
-          }}>
-          <div className="text-4xl font-black font-mono"
-            style={{ color: stats.currentStreakType === 'WON' ? '#00ff88' : '#ff4757' }}>
+        <div className={`glass-card p-4 flex items-center gap-4 ${
+          stats.currentStreakType === 'WON' 
+            ? 'border-accent-green/20 bg-accent-green/[0.04]' 
+            : 'border-accent-red/20 bg-accent-red/[0.04]'
+        }`}>
+          <div className={`text-4xl font-black font-mono ${
+            stats.currentStreakType === 'WON' ? 'text-accent-green' : 'text-accent-red'
+          }`}>
             {stats.currentStreak}
           </div>
           <div>
-            <p className="text-sm font-bold text-white">
+            <p className="text-sm font-bold text-slate-200">
               {stats.currentStreakType === 'WON' ? '🔥 Racha ganadora' : '⚠️ Racha perdedora'}
             </p>
             <p className="text-xs text-slate-500">

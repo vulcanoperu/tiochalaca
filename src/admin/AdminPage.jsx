@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Shield, Trash2, Users, UserPlus, Crown, RefreshCw, ArrowLeft, LogOut, Search, Download, KeySquare, Activity, MapPin } from 'lucide-react';
 import { fetchAdminUsers, deleteUser, getAuthHeaders, forceResetPassword, logoutUser } from '../services/backendApi';
 import AuditDashboard from './AuditDashboard';
+import LiveAlertsDashboard from './LiveAlertsDashboard';
 import { toast } from 'react-hot-toast';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
@@ -231,9 +232,16 @@ export default function AdminPage() {
         >
           <Activity size={16} /> Auditoría (Laboratorio)
         </button>
+        <button 
+          onClick={() => setActiveTab('live')}
+          className={`flex items-center gap-2 px-6 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'live' ? 'border-yellow-400 text-yellow-400' : 'border-transparent text-slate-400 hover:text-white'}`}
+        >
+          <Activity size={16} /> Alertas en Vivo
+        </button>
       </div>
 
       {activeTab === 'audit' && <AuditDashboard />}
+      {activeTab === 'live' && <LiveAlertsDashboard />}
 
       {activeTab === 'users' && (
         <>
