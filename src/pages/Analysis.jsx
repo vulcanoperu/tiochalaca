@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, RefreshCw, AlertCircle, CheckCircle2,
   Shield, Target, Clock, BarChart2, Users, Zap, Activity,
-  TrendingUp, AlertTriangle
+  TrendingUp, AlertTriangle, ChevronDown, ChevronUp
 } from 'lucide-react';
 import Loader from '../components/Loader';
 import {
@@ -36,6 +36,9 @@ export default function Analysis() {
   const { id: fixtureId } = useParams();
   const navigate = useNavigate();
   const { apiKey, picks: savedPicks, setPicks: setSavedPicks } = useApp();
+  const [activeTab, setActiveTab] = useState('summary');
+  const [activeRiskTab, setActiveRiskTab] = useState('seguras');
+  const [showPro, setShowPro] = useState(false);
 
   const [fixture, setFixture]       = useState(null);
   const [homeMatches, setHomeMatches] = useState([]);
@@ -56,6 +59,7 @@ export default function Analysis() {
 
   // Ref para rastrear alertas en vivo ya enviadas en esta sesión y no repetir
   const sentAlertsRef = useRef(new Set());
+
   // baseRef holds the ESPN-seeded baseline; timerRef holds the interval
   // tick is just a counter to force re-renders every second
   const baseRef   = useRef(null);  // { serverSec: N, startedAt: Date.now() }
@@ -124,7 +128,7 @@ export default function Analysis() {
   }, []);
 
   // TTL del caché de sesión: 5 min para partidos en curso, 4h para terminados/futuros
-  const SESSION_KEY = `chalaca_analysis_v2_${fixtureId}`; // v2: invalida caché viejo
+  const SESSION_KEY = `chalaca_analysis_v3_${fixtureId}`; // v3: fuerza recarga limpia
   const SESSION_TTL_LIVE = 5 * 60 * 1000;
   const SESSION_TTL_DONE = 4 * 60 * 60 * 1000;
   // En modo desarrollo, desactivamos el caché para que los cambios del motor se vean inmediatamente
@@ -287,7 +291,7 @@ export default function Analysis() {
       const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
       const aGF = awayFormAway.total   >= 3 ? awayFormAway.goalsFor     / awayFormAway.total   : awayForm.goalsFor   / Math.max(awayForm.total, 1);
       const aGA = awayFormAway.total   >= 3 ? awayFormAway.goalsAgainst / awayFormAway.total   : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
-      const poisson = calcMatchProbabilities(hGF, hGA, aGF, aGA);
+      const poisson = calcMatchProbabilities(hGF, hGA, aGF, aGA, fix?.league?.name || '');
 
       const isLive       = summary.header?.competitions?.[0]?.status?.type?.state === 'in';
       const liveClock    = summary.header?.competitions?.[0]?.status?.displayClock || "0'";
@@ -538,6 +542,21 @@ export default function Analysis() {
     ? new Date(fixture.fixture.date).toLocaleString('es-PE', { weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })
     : '';
 
+  // ── Verdict logic ─────────────────────────────────────────────────────
+  const topPick = picksResult?.picks?.[0] || null;
+  const confidence = topPick ? (
+    topPick.probability >= 80 ? 'high' :
+    topPick.probability >= 65 ? 'medium' : 'low'
+  ) : 'none';
+
+  const confidenceConfig = {
+    high:   { label: 'Confianza Alta',   color: '#00ff88', bg: 'rgba(0,255,136,0.06)', border: 'rgba(0,255,136,0.20)', emoji: '🟢' },
+    medium: { label: 'Confianza Media',  color: '#f59e0b', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.20)', emoji: '🟡' },
+    low:    { label: 'Confianza Baja',   color: '#ef4444', bg: 'rgba(239,68,68,0.06)',  border: 'rgba(239,68,68,0.20)',  emoji: '🔴' },
+    none:   { label: 'Sin Ventaja',      color: '#64748b', bg: 'rgba(100,116,139,0.06)', border: 'rgba(100,116,139,0.20)', emoji: '⚪' },
+  };
+  const cc = confidenceConfig[confidence];
+
   return (
     <div className="w-full space-y-4 animate-fade-in">
 
@@ -547,7 +566,7 @@ export default function Analysis() {
           <ArrowLeft size={16} />
         </button>
         <div>
-          <p className="section-title">Análisis Tipster</p>
+          <p className="section-title">Análisis del Partido</p>
           <div className="flex items-center gap-2">
             <p className="text-xs text-slate-500 mt-0.5">{fixture?.league?.name} · {kickoff}</p>
             {loadingAnalysis && (
@@ -560,685 +579,404 @@ export default function Analysis() {
         </div>
       </div>
 
-      {/* Match hero */}
+      {/* Match hero — compact */}
       <div className="glass-card p-6"
         style={{ background: 'linear-gradient(135deg, rgba(15,26,20,0.98), rgba(22,42,30,0.95))' }}>
         <div className="flex items-center justify-around gap-4">
-          {/* Home */}
           <div className="flex flex-col items-center gap-3 flex-1">
             {fixture?.teams?.home?.logo && (
-              <img src={fixture.teams.home.logo} alt="" className="w-28 h-28 object-contain drop-shadow-lg" />
+              <img src={fixture.teams.home.logo} alt="" className="w-20 h-20 md:w-28 md:h-28 object-contain drop-shadow-lg" />
             )}
-            <p className="font-black text-white text-center text-xl md:text-2xl">{fixture?.teams?.home?.name}</p>
-            <div className="flex flex-col gap-1.5 items-center mt-1">
-              <span className={`text-base px-3 py-1 rounded font-bold ${
-                homeForm?.score >= 65 ? 'badge-green' : homeForm?.score >= 40 ? 'badge-yellow' : 'badge-red'
-              }`}>
-                Forma: {homeForm?.score ?? '?'}%
-              </span>
-              
-              {/* Diagnósticos del Motor Institucional */}
-              {picksResult?.pythag?.home?.overPerforming && (
-                <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 font-bold cursor-help" title={picksResult.pythag.home.label}>
-                  ⚠️ Suerte Alta
-                </span>
-              )}
-              {picksResult?.pythag?.home?.underPerforming && (
-                <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold cursor-help" title={picksResult.pythag.home.label}>
-                  💡 Infravalorado
-                </span>
-              )}
-              {picksResult?.volatility?.home?.isHighVolatility && (
-                <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-400 border border-orange-500/30 font-bold cursor-help" title={picksResult.volatility.home.label}>
-                  🔴 Inestable
-                </span>
-              )}
+            <p className="font-bold text-white text-center text-base md:text-xl">{fixture?.teams?.home?.name}</p>
+          </div>
+          <div className="flex flex-col items-center gap-3">
+            <div className="text-4xl md:text-5xl font-numbers text-white bg-surface-900/80 px-5 py-3 md:px-6 md:py-4 rounded-2xl border border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.4)] flex items-center justify-center min-w-[120px] md:min-w-[140px] tracking-tighter gap-3">
+              <span className="text-accent-green">{fixture?.goals?.home ?? 0}</span>
+              <span className="text-slate-800 opacity-50 font-light">-</span>
+              <span className="text-accent-green">{fixture?.goals?.away ?? 0}</span>
             </div>
           </div>
+          <div className="flex flex-col items-center gap-3 flex-1">
+            {fixture?.teams?.away?.logo && (
+              <img src={fixture.teams.away.logo} alt="" className="w-20 h-20 md:w-28 md:h-28 object-contain drop-shadow-lg" />
+            )}
+            <p className="font-bold text-white text-center text-base md:text-xl">{fixture?.teams?.away?.name}</p>
+          </div>
+        </div>
+      </div>
 
-          {/* VS / Scoreboard center */}
-          <div className="flex flex-col items-center gap-3">
-            {(fixture?.fixture?.status?.short !== 'NS' || fixture?.goals?.home > 0 || fixture?.goals?.away > 0) ? (
-              <div className="flex flex-col items-center animate-in fade-in zoom-in duration-500">
-                <div className="flex items-center gap-4">
-                  <div className="text-5xl font-numbers text-white bg-surface-900/80 px-6 py-4 rounded-2xl border border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.4)] flex items-center justify-center min-w-[140px] tracking-tighter gap-3">
-                    {fixture.redCards?.home > 0 && (
-                      <div className="flex flex-col items-center gap-1">
-                        <div className="w-[11px] h-[16px] bg-red-600 rounded-[2px] shadow-[0_0_15px_rgba(220,38,38,0.5)]"
-                          style={isLiveMatch ? { animation: 'pulse 1.5s infinite' } : {}} />
-                        {fixture.redCards.home > 1 && (
-                          <span className="text-[10px] font-bold text-red-400 leading-none">{fixture.redCards.home}</span>
-                        )}
-                      </div>
-                    )}
-                    <span className="text-accent-green">{fixture.goals?.home ?? 0}</span>
-                    <span className="text-slate-800 opacity-50 font-light">-</span>
-                    <span className="text-accent-green">{fixture.goals?.away ?? 0}</span>
-                    {fixture.redCards?.away > 0 && (
-                      <div className="flex flex-col items-center gap-1">
-                        <div className="w-[11px] h-[16px] bg-red-600 rounded-[2px] shadow-[0_0_10px_rgba(220,38,38,0.7)]"
-                          style={isLiveMatch ? { animation: 'pulse 1.5s infinite' } : {}} />
-                        {fixture.redCards.away > 1 && (
-                          <span className="text-[10px] font-black text-red-400 leading-none">{fixture.redCards.away}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
+      {/* ════════════════════════════════════════════════════════════════════
+           TIER 1 — VEREDICTO SIMPLE (para todos)
+         ════════════════════════════════════════════════════════════════════ */}
+      {!loadingAnalysis && picksResult && (
+        <div className="rounded-2xl border-[2px] overflow-hidden animate-in fade-in slide-in-from-bottom-3 duration-500"
+          style={{ background: cc.bg, borderColor: cc.border }}>
 
-                {/* Live clock / Halftime / Finished badge */}
-                {(() => {
-                  const status = fixture?.fixture?.status?.short;
-                  // Compute elapsed time fresh from wall-clock on every render (tick drives re-renders)
-                  const currentSec = (isLiveMatch && baseRef.current)
-                    ? baseRef.current.serverSec + Math.floor((Date.now() - baseRef.current.startedAt) / 1000)
-                    : null;
+          {/* Confidence badge */}
+          <div className="px-6 pt-5 pb-0">
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest"
+              style={{ background: `${cc.color}15`, color: cc.color, border: `1px solid ${cc.border}` }}>
+              <span>{cc.emoji}</span>
+              {cc.label}
+            </span>
+            {topPick?.category === 'segura' && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-widest bg-accent-green/10 text-accent-green border border-accent-green/20 ml-2">
+                🛡️ Apuesta Segura
+              </span>
+            )}
+            {topPick?.category === 'valor' && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-widest bg-purple-500/10 text-purple-400 border border-purple-500/20 ml-2">
+                💎 Cuota de Valor
+              </span>
+            )}
+          </div>
 
-                  if (status === 'HT') return (
-                    // ── ENTRETIEMPO ──
-                    <div className="mt-3 flex flex-col items-center gap-1.5">
-                      <div className="px-5 py-2 rounded-full flex items-center gap-2.5"
-                        style={{ background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.4)' }}>
-                        <span className="text-[10px] font-black uppercase tracking-[0.25em] text-orange-400">☕ Descanso</span>
-                      </div>
-                      <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-orange-400/50">45:00 · Entretiempo</span>
-                    </div>
-                  );
-
-                  if (status === 'LIVE' && currentSec !== null) {
-                    const dispMin   = Math.floor(currentSec / 60);
-                    const dispSec   = currentSec % 60;
-                    const period    = fixture.fixture.livePeriod ?? 1;
-                    const halfLabel = period === 1 ? '1T' : period === 2 ? '2T' : `P${period}`;
-                    return (
-                      // ── EN VIVO con reloj en tiempo real ──
-                      <div className="mt-3 flex flex-col items-center gap-1.5">
-                        <div className="px-4 py-1.5 rounded-full bg-accent-red/10 border border-accent-red/20 flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-accent-red animate-pulse"></span>
-                          <span className="font-numbers text-accent-red font-bold text-base tracking-widest">
-                            {String(dispMin).padStart(2,'0')}:{String(dispSec).padStart(2,'0')}
-                          </span>
-                          <span className="text-[9px] font-bold text-accent-red/50 uppercase tracking-[0.2em]">{halfLabel}</span>
-                        </div>
-                        <span className="text-[9px] text-accent-red/40 font-bold uppercase tracking-[0.2em]">En Vivo</span>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    // ── FINALIZADO u otro estado ──
-                    <div className={`mt-3 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2 border ${
-                      status === 'LIVE'
-                        ? 'bg-accent-red/10 border-accent-red/30 text-accent-red animate-pulse'
-                        : 'bg-accent-green/10 border-accent-green/30 text-accent-green'
-                    }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${status === 'LIVE' ? 'bg-accent-red' : 'bg-accent-green'}`}></span>
-                      {status === 'LIVE' ? 'En Vivo' : 'Finalizado'}
-                    </div>
-                  );
-                })()}
-
-              </div>
+          {/* Main verdict */}
+          <div className="px-6 py-5">
+            {topPick ? (
+              <>
+                <h2 className="text-xl md:text-2xl font-bold text-white leading-tight mb-2">
+                  👉 {topPick.selection}
+                </h2>
+                <p className="text-sm text-slate-300 leading-relaxed mb-1">
+                  {topPick.narrative || topPick.argument || `Nuestro motor recomienda esta apuesta con un ${topPick.probability}% de confianza.`}
+                </p>
+                {topPick.market && (
+                  <p className="text-xs text-slate-500 mt-2">Mercado: {topPick.market}</p>
+                )}
+              </>
             ) : (
               <>
-                <div className="text-3xl font-black text-slate-700 font-mono tracking-widest opacity-40">VS</div>
-                {poisson && (
-                  <div className="flex flex-col items-center">
-                    <div className="flex gap-4 bg-white/5 p-4 rounded-xl border border-white/5 shadow-inner">
-                      <ProbCircle prob={poisson.home} label="Local" color="#00ff88" />
-                      <ProbCircle prob={poisson.draw} label="Empate" color="#ffd700" />
-                      <ProbCircle prob={poisson.away} label="Visit." color="#ff4757" />
-                    </div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Modelo Poisson</p>
-                  </div>
-                )}
-                {marketInsight?.predictions?.percent?.home && (
-                  <div className="mt-4 w-full bg-surface-900/50 p-3 rounded-xl border border-[#BFF102]/20">
-                    <div className="flex items-center gap-1.5 mb-2 justify-center">
-                      <Zap size={12} className="text-[#BFF102]" />
-                      <p className="text-[10px] text-[#BFF102] font-bold uppercase tracking-widest">Predicción Oficial ESPN</p>
-                    </div>
-                    <div className="flex w-full h-2 rounded-full overflow-hidden bg-black/50 mb-2">
-                      <div className="h-full bg-accent-green" style={{ width: `${marketInsight.predictions.percent.home}%` }}></div>
-                      <div className="h-full bg-yellow-500" style={{ width: `${marketInsight.predictions.percent.draw}%` }}></div>
-                      <div className="h-full bg-accent-red" style={{ width: `${marketInsight.predictions.percent.away}%` }}></div>
-                    </div>
-                    <div className="flex justify-between w-full px-1">
-                      <div className="flex flex-col items-start">
-                        <span className="text-[11px] font-numbers font-bold text-accent-green">{marketInsight.predictions.percent.home}%</span>
-                        <span className="text-[9px] text-slate-500 font-numbers">{(100 / marketInsight.predictions.percent.home).toFixed(2)}</span>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <span className="text-[11px] font-numbers font-bold text-yellow-500">{marketInsight.predictions.percent.draw}%</span>
-                        <span className="text-[9px] text-slate-500 font-numbers">{(100 / marketInsight.predictions.percent.draw).toFixed(2)}</span>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="text-[11px] font-numbers font-bold text-accent-red">{marketInsight.predictions.percent.away}%</span>
-                        <span className="text-[9px] text-slate-500 font-numbers">{(100 / marketInsight.predictions.percent.away).toFixed(2)}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                <h2 className="text-xl font-bold text-slate-300 leading-tight mb-2">
+                  No encontramos una ventaja clara
+                </h2>
+                <p className="text-sm text-slate-500 leading-relaxed">
+                  {picksResult.reason || 'El motor de análisis no detectó una oportunidad con suficiente respaldo estadístico para este partido.'}
+                </p>
               </>
             )}
           </div>
 
-          {/* Away */}
-          <div className="flex flex-col items-center gap-3 flex-1">
-            {fixture?.teams?.away?.logo && (
-              <img src={fixture.teams.away.logo} alt="" className="w-28 h-28 object-contain drop-shadow-lg" />
+          {/* Action row */}
+          {topPick && (
+            <div className="px-6 pb-5 flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => saveIndividualPick(topPick)}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm uppercase tracking-wider transition-all duration-300 hover:scale-105 shadow-lg"
+                style={{ background: `linear-gradient(135deg, ${cc.color}, ${cc.color}99)`, color: '#000' }}
+              >
+                <CheckCircle2 size={16} />
+                Guardar este Pick
+              </button>
+              <div className="flex items-center gap-2">
+                {topPick.probability && (
+                  <span className="text-2xl font-numbers font-bold" style={{ color: cc.color }}>
+                    {topPick.probability}%
+                  </span>
+                )}
+                {topPick.odds && (
+                  <span className="text-xs text-slate-500 border border-white/10 px-2 py-1 rounded-lg">
+                    Cuota {topPick.odds}
+                  </span>
+                )}
+                {topPick.risk && (
+                  <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${
+                    topPick.risk === 'Bajo' ? 'bg-accent-green/15 text-accent-green'
+                    : topPick.risk === 'Moderado' ? 'bg-amber-400/15 text-amber-400'
+                    : 'bg-red-500/15 text-red-400'
+                  }`}>{topPick.risk}</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Picks agrupados en Seguras y Arriesgadas (Apilados) */}
+      {!showPro && !loadingAnalysis && picksResult?.picks?.length > 1 && (() => {
+        const remainingPicks = picksResult.picks.slice(1);
+        const seguras = remainingPicks.filter(p => p.category === 'segura' || p.probability >= 80 || p.tier === '🟢');
+        const arriesgadas = remainingPicks.filter(p => !(p.category === 'segura' || p.probability >= 80 || p.tier === '🟢'));
+
+        return (
+          <div className="space-y-8 mt-6">
+            
+            {/* BLOQUE: SEGURAS */}
+            {seguras.length > 0 && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <h3 className="text-sm md:text-base font-black uppercase tracking-widest text-accent-green mb-3 flex items-center gap-2 drop-shadow-md px-1">
+                  <Shield size={18} /> Apuestas Seguras (Fijas)
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {seguras.slice(0, 6).map((pick, i) => (
+                    <div key={`s-${i}`} className="relative rounded-xl border border-accent-green/20 bg-accent-green/5 overflow-hidden flex flex-col hover:bg-accent-green/10 transition-colors shadow-lg group">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-accent-green/10 rounded-full blur-3xl pointer-events-none" />
+                      
+                      <div className="flex p-4 flex-1">
+                        <div className="flex flex-col items-center justify-center pr-4 border-r border-accent-green/20 min-w-[75px]">
+                          <span className="text-3xl font-numbers font-black text-accent-green leading-none">{pick.probability}%</span>
+                          <span className="text-[9px] font-bold text-accent-green/70 uppercase tracking-widest mt-1">Prob</span>
+                        </div>
+                        <div className="pl-4 flex-1 flex flex-col justify-center min-w-0 z-10">
+                          <div className="flex flex-col items-start mb-2">
+                            <p className="text-sm font-bold text-white leading-tight mb-1">{pick.selection}</p>
+                            <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-accent-green/10 text-accent-green">
+                              {pick.market}
+                            </span>
+                          </div>
+                          {(pick.argument || pick.narrative) && (
+                            <p className="text-[10px] text-emerald-100/70 leading-snug line-clamp-3 italic border-l-2 border-accent-green/30 pl-2">
+                              "{pick.argument || pick.narrative}"
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between px-4 py-3 bg-black/40 border-t border-accent-green/10 z-10 mt-auto">
+                        <div className="flex flex-col">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 mb-0.5">Cuota</span>
+                          <span className="text-sm font-numbers font-black text-white bg-accent-green/20 border border-accent-green/30 px-2.5 py-0.5 rounded shadow-sm">
+                            {pick.odds ? pick.odds : 'Ver en casa'}
+                          </span>
+                        </div>
+                        <button onClick={() => saveIndividualPick(pick)}
+                          className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg border border-accent-green/40 text-accent-green hover:bg-accent-green hover:text-surface-900 transition-colors">
+                          Guardar Pick
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
-            <p className="font-black text-white text-center text-xl md:text-2xl">{fixture?.teams?.away?.name}</p>
-            <div className="flex flex-col gap-1.5 items-center mt-1">
-              <span className={`text-base px-3 py-1 rounded font-bold ${
-                awayForm?.score >= 65 ? 'badge-green' : awayForm?.score >= 40 ? 'badge-yellow' : 'badge-red'
-              }`}>
-                Forma: {awayForm?.score ?? '?'}%
-              </span>
 
-              {/* Diagnósticos del Motor Institucional */}
-              {picksResult?.pythag?.away?.overPerforming && (
-                <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 font-bold cursor-help" title={picksResult.pythag.away.label}>
-                  ⚠️ Suerte Alta
-                </span>
-              )}
-              {picksResult?.pythag?.away?.underPerforming && (
-                <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 font-bold cursor-help" title={picksResult.pythag.away.label}>
-                  💡 Infravalorado
-                </span>
-              )}
-              {picksResult?.volatility?.away?.isHighVolatility && (
-                <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-400 border border-orange-500/30 font-bold cursor-help" title={picksResult.volatility.away.label}>
-                  🔴 Inestable
-                </span>
-              )}
-            </div>
+            {/* BLOQUE: ARRIESGADAS / ALTO VALOR */}
+            {arriesgadas.length > 0 && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <h3 className="text-sm md:text-base font-black uppercase tracking-widest text-yellow-400 mb-3 flex items-center gap-2 drop-shadow-md px-1">
+                  <Zap size={18} /> Apuestas Arriesgadas (Alto Valor)
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {arriesgadas.slice(0, 6).map((pick, i) => (
+                    <div key={`a-${i}`} className="relative rounded-xl border border-yellow-400/20 bg-yellow-400/5 overflow-hidden flex flex-col hover:bg-yellow-400/10 transition-colors shadow-lg group">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-400/10 rounded-full blur-3xl pointer-events-none" />
+                      
+                      <div className="flex p-4 flex-1">
+                        <div className="flex flex-col items-center justify-center pr-4 border-r border-yellow-400/20 min-w-[75px]">
+                          <span className="text-3xl font-numbers font-black text-yellow-400 leading-none">{pick.probability}%</span>
+                          <span className="text-[9px] font-bold text-yellow-400/70 uppercase tracking-widest mt-1">Valor</span>
+                        </div>
+                        <div className="pl-4 flex-1 flex flex-col justify-center min-w-0 z-10">
+                          <div className="flex flex-col items-start mb-2">
+                            <p className="text-sm font-bold text-white leading-tight mb-1">{pick.selection}</p>
+                            <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-yellow-400/10 text-yellow-400">
+                              {pick.market}
+                            </span>
+                          </div>
+                          {(pick.argument || pick.narrative) && (
+                            <p className="text-[10px] text-yellow-100/70 leading-snug line-clamp-3 italic border-l-2 border-yellow-400/30 pl-2">
+                              "{pick.argument || pick.narrative}"
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between px-4 py-3 bg-black/40 border-t border-yellow-400/10 z-10 mt-auto">
+                        <div className="flex flex-col">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 mb-0.5">Cuota</span>
+                          <span className="text-sm font-numbers font-black text-surface-900 bg-yellow-400 border border-yellow-400/50 px-2.5 py-0.5 rounded shadow-sm">
+                            {pick.odds ? pick.odds : 'Ver en casa'}
+                          </span>
+                        </div>
+                        <button onClick={() => saveIndividualPick(pick)}
+                          className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg border border-yellow-400/40 text-yellow-400 hover:bg-yellow-400 hover:text-surface-900 transition-colors">
+                          Guardar Pick
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
-      {/* ── INFO DEL PARTIDO (Estadio y Árbitro) ── */}
-      <div className="flex flex-col sm:flex-row gap-2 justify-center mb-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
-        <div className="bg-surface-900/50 border border-white/5 rounded-lg px-4 py-2 flex items-center justify-center gap-2">
-           <span className="text-xl">🏟️</span>
-           <span className="text-[11px] font-bold text-slate-300 uppercase tracking-widest truncate max-w-[200px]">
-             {fixture?.venue || fixture?.city || 'Estadio por confirmar'}
-           </span>
-        </div>
-        <div className="bg-surface-900/50 border border-white/5 rounded-lg px-4 py-2 flex items-center justify-center gap-2">
-           <span className="text-xl">⚖️</span>
-           <div className="flex flex-col items-center sm:items-start">
-             <span className="text-[11px] font-bold text-slate-300 uppercase tracking-widest truncate max-w-[200px]">
-               {fixture?.referee || analysis?.refereeStats?.name || 'Árbitro por confirmar'}
-             </span>
-             {analysis?.refereeStats?.matches > 0 && (
-               <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">
-                 {analysis.refereeStats.avgYellow + analysis.refereeStats.avgRed} Tarjetas/p.
-               </span>
-             )}
-           </div>
-        </div>
-      </div>
-
-      {/* ── PICKS (the star) ── */}
-      <SECTION icon={Zap} title="📊 Apuestas Recomendadas" id="picks">
-        {picksResult && (
-          <div className="space-y-4">
-            <PicksTable 
-              picks={picksResult.picks} 
-              reason={picksResult.reason} 
-              onSavePick={saveIndividualPick}
-              isLive={isLiveMatch}
-            />
-          </div>
+      {/* ════════════════════════════════════════════════════════════════════
+           TIER 2 — MODO PROFESIONAL (colapsable)
+         ════════════════════════════════════════════════════════════════════ */}
+      <button
+        onClick={() => setShowPro(!showPro)}
+        className="w-full flex items-center justify-center gap-2 py-4 rounded-xl border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] transition-all duration-300 group"
+      >
+        <BarChart2 size={16} className="text-slate-500 group-hover:text-accent-green transition-colors" />
+        <span className="text-sm font-bold text-slate-400 group-hover:text-white transition-colors">
+          {showPro ? 'Ocultar Datos Profesionales' : 'Ver Datos Profesionales'}
+        </span>
+        {showPro ? (
+          <ChevronUp size={16} className="text-slate-500 group-hover:text-white transition-colors" />
+        ) : (
+          <ChevronDown size={16} className="text-slate-500 group-hover:text-white transition-colors" />
         )}
-      </SECTION>
+      </button>
 
-      {/* ── ESTADÍSTICAS DEL PARTIDO (Oculto temporalmente a pedido del usuario) ── */}
-      {false && matchStats && fixture?.fixture?.status?.short !== 'NS' && (
-        <section className="glass-card p-5 animate-slide-up" style={{ background: 'linear-gradient(135deg, rgba(15,26,20,0.98), rgba(22,42,30,0.95))' }}>
-          <div className="flex items-center gap-2 mb-5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.2)' }}>
-              <TrendingUp size={14} className="text-accent-green" />
-            </div>
-            <h2 className="text-sm font-bold text-white">📊 Estadísticas del Partido</h2>
-            <span className={`ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-              fixture?.fixture?.status?.short === 'FT' 
-                ? 'bg-accent-green/10 text-accent-green border-accent-green/20'
-                : 'bg-amber-400/10 text-amber-400 border-amber-400/20 animate-pulse'
-            }`}>
-              {fixture?.fixture?.status?.short === 'FT' ? 'RESULTADO FINAL' : 'ESTADÍSTICAS EN VIVO'}
-            </span>
+      {showPro && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-top-3 duration-400">
+          
+          <div className="text-center py-2 px-4 rounded-lg bg-black/40 border border-white/5 mb-4">
+            <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
+              Fuentes de datos activas: <span className="text-slate-300">ESPN Analytics</span> (Estadísticas, Eventos) y <span className="text-slate-300">BSD Consensus</span> (Cuotas).
+            </p>
           </div>
 
-          {/* Scoreline context */}
-          <div className="flex items-center justify-center gap-6 mb-5">
-            <span className="text-sm font-bold text-slate-300">{fixture.teams.home.name}</span>
-            <span className="text-2xl font-black font-mono text-white bg-surface-900/80 px-5 py-2 rounded-xl border border-white/10">
-              {fixture.goals.home} – {fixture.goals.away}
-            </span>
-            <span className="text-sm font-bold text-slate-300">{fixture.teams.away.name}</span>
-          </div>
 
-          {/* Stats grid */}
-          <div className="space-y-3">
+
+          {/* ── Forma ── */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {[
-              {
-                label: 'Posesión', icon: '⚽',
-                home: matchStats.possession.home ? `${matchStats.possession.home}%` : null,
-                away: matchStats.possession.away ? `${matchStats.possession.away}%` : null,
-                homePct: matchStats.possession.home ? parseFloat(matchStats.possession.home) : 50,
-                awayPct: matchStats.possession.away ? parseFloat(matchStats.possession.away) : 50,
-                isPercentage: true,
-              },
-              {
-                label: 'Tiros Totales', icon: '🎯',
-                home: matchStats.shots.home,
-                away: matchStats.shots.away,
-                homePct: matchStats.shots.home && matchStats.shots.away ? (parseFloat(matchStats.shots.home) / (parseFloat(matchStats.shots.home) + parseFloat(matchStats.shots.away))) * 100 : 50,
-                awayPct: matchStats.shots.home && matchStats.shots.away ? (parseFloat(matchStats.shots.away) / (parseFloat(matchStats.shots.home) + parseFloat(matchStats.shots.away))) * 100 : 50,
-              },
-              {
-                label: 'A Puerta', icon: '🥅',
-                home: matchStats.shotsOnTarget.home,
-                away: matchStats.shotsOnTarget.away,
-                homePct: matchStats.shotsOnTarget.home && matchStats.shotsOnTarget.away ? (parseFloat(matchStats.shotsOnTarget.home) / (parseFloat(matchStats.shotsOnTarget.home) + parseFloat(matchStats.shotsOnTarget.away))) * 100 : 50,
-                awayPct: matchStats.shotsOnTarget.home && matchStats.shotsOnTarget.away ? (parseFloat(matchStats.shotsOnTarget.away) / (parseFloat(matchStats.shotsOnTarget.home) + parseFloat(matchStats.shotsOnTarget.away))) * 100 : 50,
-              },
-              {
-                label: 'Córners', icon: '🚩',
-                home: matchStats.corners.home,
-                away: matchStats.corners.away,
-                homePct: matchStats.corners.home && matchStats.corners.away ? (parseFloat(matchStats.corners.home) / (parseFloat(matchStats.corners.home) + parseFloat(matchStats.corners.away))) * 100 : 50,
-                awayPct: matchStats.corners.home && matchStats.corners.away ? (parseFloat(matchStats.corners.away) / (parseFloat(matchStats.corners.home) + parseFloat(matchStats.corners.away))) * 100 : 50,
-              },
-              {
-                label: 'Faltas', icon: '🟡',
-                home: matchStats.fouls.home,
-                away: matchStats.fouls.away,
-                homePct: matchStats.fouls.home && matchStats.fouls.away ? (parseFloat(matchStats.fouls.home) / (parseFloat(matchStats.fouls.home) + parseFloat(matchStats.fouls.away))) * 100 : 50,
-                awayPct: matchStats.fouls.home && matchStats.fouls.away ? (parseFloat(matchStats.fouls.away) / (parseFloat(matchStats.fouls.home) + parseFloat(matchStats.fouls.away))) * 100 : 50,
-              },
-            ].filter(row => row.home !== null && row.away !== null).map(({ label, icon, home, away, homePct, awayPct }) => (
-              <div key={label}>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[13px] font-bold text-white font-numbers min-w-[3rem] text-right"
-                    style={{ color: homePct >= awayPct ? '#00ff88' : 'rgba(255,255,255,0.7)' }}>
-                    {home}
-                  </span>
-                  <span className="text-[10px] text-slate-500 uppercase tracking-[0.15em] font-bold mx-3 w-32 text-center flex items-center justify-center gap-1.5 opacity-60">
-                    {icon} {label}
-                  </span>
-                  <span className="text-[13px] font-bold font-numbers min-w-[3rem] text-left"
-                    style={{ color: awayPct > homePct ? '#ff4757' : 'rgba(255,255,255,0.7)' }}>
-                    {away}
-                  </span>
+              { team: fixture?.teams?.home, form: homeForm, matches: homeMatches, split: homeSplit, teamId: homeId },
+              { team: fixture?.teams?.away, form: awayForm, matches: awayMatches, split: awaySplit, teamId: awayId },
+            ].map(({ team, form, matches, split, teamId }) => (
+              <SECTION key={teamId} icon={BarChart2} title={`Forma · ${team?.name}`} id={`form-${teamId}`}>
+                <div className="space-y-3">
+                  <div className="mb-4">
+                    <p className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">Últimos {Math.min(matches?.length ?? 0, 12)} partidos</p>
+                    <FormPills matches={matches} teamId={teamId} />
+                  </div>
                 </div>
-                <div className="flex h-2 rounded-full overflow-hidden bg-white/5">
-                  <div
-                    className="h-full transition-all duration-700 rounded-l-full"
-                    style={{ width: `${homePct}%`, background: 'linear-gradient(90deg, #00ff88, #00d97e)' }}
-                  />
-                  <div
-                    className="h-full transition-all duration-700 rounded-r-full"
-                    style={{ width: `${awayPct}%`, background: 'linear-gradient(90deg, #ff6b7a, #ff4757)' }}
-                  />
-                </div>
-              </div>
+              </SECTION>
             ))}
           </div>
 
-          {/* Cards & Offsides row */}
-          {(matchStats.yellowCards.home !== null || matchStats.redCards.home !== null || matchStats.offsides.home !== null) && (
-            <div className="flex gap-3 mt-5 pt-4 border-t border-white/5">
-              {matchStats.yellowCards.home !== null && (
-                <div className="flex-1 bg-surface-900/60 rounded-lg p-3 text-center border border-yellow-500/10">
-                  <div className="flex justify-center items-center gap-2 mb-1">
-                    <div className="w-3 h-4 bg-yellow-400 rounded-[2px]" />
-                    <span className="text-xs font-black text-white">{matchStats.yellowCards.home}</span>
-                    <span className="text-xs text-slate-600">–</span>
-                    <span className="text-xs font-black text-white">{matchStats.yellowCards.away}</span>
-                  </div>
-                  <p className="text-[9px] text-yellow-500/60 uppercase tracking-widest">Amarillas</p>
-                </div>
-              )}
-              {matchStats.redCards.home !== null && (
-                <div className="flex-1 bg-surface-900/60 rounded-lg p-3 text-center border border-red-500/10">
-                  <div className="flex justify-center items-center gap-2 mb-1">
-                    <div className="w-3 h-4 bg-red-600 rounded-[2px]" />
-                    <span className="text-xs font-black text-white">{matchStats.redCards.home}</span>
-                    <span className="text-xs text-slate-600">–</span>
-                    <span className="text-xs font-black text-white">{matchStats.redCards.away}</span>
-                  </div>
-                  <p className="text-[9px] text-red-500/60 uppercase tracking-widest">Rojas</p>
-                </div>
-              )}
-              {matchStats.offsides.home !== null && (
-                <div className="flex-1 bg-surface-900/60 rounded-lg p-3 text-center border border-white/5">
-                  <div className="flex justify-center items-center gap-2 mb-1">
-                    <span className="text-xs">🚩</span>
-                    <span className="text-xs font-black text-white">{matchStats.offsides.home}</span>
-                    <span className="text-xs text-slate-600">–</span>
-                    <span className="text-xs font-black text-white">{matchStats.offsides.away}</span>
-                  </div>
-                  <p className="text-[9px] text-slate-500 uppercase tracking-widest">Fueras de Juego</p>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
-
-
-      {/* ── FORMA RECIENTE ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {[
-          { team: fixture?.teams?.home, form: homeForm, matches: homeMatches, split: homeSplit, teamId: homeId, color: '#00ff88' },
-          { team: fixture?.teams?.away, form: awayForm, matches: awayMatches, split: awaySplit, teamId: awayId, color: '#ff4757' },
-        ].map(({ team, form, matches, split, teamId, color }) => (
-          <SECTION key={teamId} icon={BarChart2} title={`Forma · ${team?.name}`} id={`form-${teamId}`}>
-            <div className="space-y-3">
-              <div className="mb-4">
-                <p className="text-[10px] text-slate-500 mb-2 uppercase tracking-wider">
-                  Análisis sobre los últimos {Math.min(matches?.length ?? 0, 12)} partidos
-                </p>
-                <FormPills matches={matches} teamId={teamId} />
-              </div>
-              <div className="space-y-0.5">
-                <StatRow label="Partidos Jugados" value={form?.total ?? '–'} />
-                <StatRow label="Ganó / Empató / Perdió"
-                  value={`${form?.wins ?? 0}–${form?.draws ?? 0}–${form?.losses ?? 0}`} />
-                <StatRow label="Goles a favor"
-                  value={(form?.total > 0 ? (form.goalsFor / form.total).toFixed(1) : '–')}
-                  sub="por partido" color="text-accent-green" />
-                <StatRow label="Goles recibidos"
-                  value={(form?.total > 0 ? (form.goalsAgainst / form.total).toFixed(1) : '–')}
-                  sub="por partido" color="text-accent-red" />
-                <StatRow label="Más de 2.5 goles" value={`${split?.over25Pct ?? 0}%`}
-                  pct={split?.over25Pct ?? 0} color={split?.over25Pct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-                <StatRow label="Ambos equipos marcan" value={`${split?.bttsPct ?? 0}%`}
-                  pct={split?.bttsPct ?? 0} color={split?.bttsPct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-              </div>
-            </div>
-          </SECTION>
-        ))}
-      </div>
-
-
-      {/* ── GOLES POR TRAMO ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-        {[
-          { label: fixture?.teams?.home?.name, slots: homeSlots, color: '#00ff88', actualGoals: homeForm?.goalsFor || 0 },
-          { label: fixture?.teams?.away?.name, slots: awaySlots, color: '#ff4757', actualGoals: awayForm?.goalsFor || 0 },
-        ].map(({ label, slots, color, actualGoals }) => (
-          <SECTION key={label} icon={Clock} title={`⏱ Goles por tramo · ${label}`} id={`slots-${label}`}>
-            {slots && <GoalTimeline slots={slots} color={color} actualGoals={actualGoals} />}
-            {!slots && <p className="text-xs text-slate-600">Sin datos de tramos disponibles</p>}
-          </SECTION>
-        ))}
-      </div>
-
-
-      {/* ── H2H ── */}
-      <SECTION icon={Users} title="H2H · Historial de enfrentamientos" id="h2h">
-        {h2hData && (
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold font-mono text-accent-green">{h2hData.homeWinPct}%</p>
-              <p className="text-[10px] text-slate-500">{fixture?.teams?.home?.name?.split(' ')[0]}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold font-mono text-amber-400">{h2hData.drawPct}%</p>
-              <p className="text-[10px] text-slate-500">Empate</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-bold font-mono text-accent-red">{h2hData.awayWinPct}%</p>
-              <p className="text-[10px] text-slate-500">{fixture?.teams?.away?.name?.split(' ')[0]}</p>
-            </div>
-          </div>
-        )}
-        <H2HTable matches={h2hMatches} homeId={homeId} awayId={awayId}
-          homeName={fixture?.teams?.home?.name} awayName={fixture?.teams?.away?.name} />
-        {h2hData && (
-          <div className="grid grid-cols-2 gap-2 mt-4">
-            <StatRow label="Más de 2.5 goles (Historial)" value={`${h2hData.over25Pct}%`}
-              pct={h2hData.over25Pct} color={h2hData.over25Pct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-            <StatRow label="Ambos marcan (Historial)" value={`${h2hData.bttsPct}%`}
-              pct={h2hData.bttsPct} color={h2hData.bttsPct >= 60 ? 'text-accent-green' : 'text-slate-300'} />
-            <StatRow label="Media de goles" value={h2hData.avgGoals} sub="por partido" />
-            <StatRow label="Partidos analizados" value={h2hData.total} />
-          </div>
-        )}
-
-      </SECTION>
-
-      {/* ── TARJETAS ── */}
-      {(analysis?.homeCardsAnalysis || analysis?.awayCardsAnalysis) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
-          {[
-            { label: fixture?.teams?.home?.name, logo: fixture?.teams?.home?.logo, cards: analysis.homeCardsAnalysis },
-            { label: fixture?.teams?.away?.name, logo: fixture?.teams?.away?.logo, cards: analysis.awayCardsAnalysis },
-          ].map(({ label, logo, cards }) => (
-            <SECTION key={`cards-${label}`} icon={Shield} title={`Disciplina · ${label}`} id={`cards-${label}`}>
-              {cards ? (
-                <div className="space-y-4">
-
-                  {/* Team header */}
-                  <div className="flex items-center gap-2 mb-1">
-                    {logo && <img src={logo} alt={label} className="w-5 h-5 object-contain opacity-80" />}
-                    <span className="text-xs text-slate-400 font-semibold">Basado en {cards.matches} partidos</span>
-                  </div>
-
-                  {/* Card averages — visual */}
-                  <div className="flex items-stretch gap-3">
-                    {/* Yellow */}
-                    <div className="flex-1 rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 flex flex-col items-center gap-2">
-                      <div className="w-7 h-10 bg-yellow-400 rounded-[3px] shadow-[0_0_14px_rgba(250,204,21,0.5)]" />
-                      <p className="text-3xl font-black font-mono text-yellow-400 leading-none mt-1">
-                        {cards.avgYellow}
-                      </p>
-                      <p className="text-[10px] text-yellow-500/70 uppercase tracking-widest font-bold text-center">
-                        Amarillas<br />por partido
-                      </p>
+          {/* ── Mercado de Goles (Over/Under) ── */}
+          {(homeSplit || awaySplit) && (
+            <SECTION icon={Target} title="Mercado de Goles (Tendencia)" id="goals-market">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  { label: fixture?.teams?.home?.name, split: homeSplit, form: homeForm },
+                  { label: fixture?.teams?.away?.name, split: awaySplit, form: awayForm },
+                ].map(({ label, split, form }) => split && (
+                  <div key={`goals-${label}`} className="p-4 border border-white/5 bg-black/20 rounded-xl">
+                    <p className="text-sm font-bold text-white mb-3 text-center">{label}</p>
+                    
+                    <div className="flex justify-between items-center bg-white/5 p-2 rounded mb-2">
+                      <span className="text-xs text-slate-400">Promedio Goles / Partido</span>
+                      <span className="text-sm font-bold text-accent-green">
+                        {form?.total > 0 ? ((form.goalsFor + form.goalsAgainst) / form.total).toFixed(1) : '-'}
+                      </span>
                     </div>
 
-                    {/* Red */}
-                    <div className="flex-1 rounded-xl border border-red-500/20 bg-red-500/5 p-4 flex flex-col items-center gap-2">
-                      <div className="w-7 h-10 bg-red-600 rounded-[3px] shadow-[0_0_14px_rgba(220,38,38,0.5)]" />
-                      <p className="text-3xl font-black font-mono text-red-400 leading-none mt-1">
-                        {cards.avgRed}
-                      </p>
-                      <p className="text-[10px] text-red-500/70 uppercase tracking-widest font-bold text-center">
-                        Rojas<br />por partido
-                      </p>
+                    <div className="flex justify-between items-center bg-white/5 p-2 rounded mb-3">
+                      <span className="text-xs text-slate-400">Ambos Anotan (BTTS)</span>
+                      <span className="text-sm font-bold" style={{ color: (split.bttsPct >= 60) ? '#00ff88' : '#f59e0b' }}>
+                        {split.bttsPct ?? 0}%
+                      </span>
                     </div>
 
-                    {/* Total + rating */}
-                    <div className="flex-1 rounded-xl border border-white/8 bg-white/3 p-4 flex flex-col items-center justify-center gap-2">
-                      <p className="text-3xl font-black font-mono text-white leading-none">{cards.avg}</p>
-                      <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold text-center">
-                        Total<br />tarjetas/p
-                      </p>
-                      <div className={`mt-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-widest ${
-                        parseFloat(cards.avg) >= 3 ? 'bg-red-500/20 text-red-400' :
-                        parseFloat(cards.avg) >= 2 ? 'bg-orange-500/20 text-orange-400' :
-                        'bg-green-500/20 text-green-400'
-                      }`}>
-                        {parseFloat(cards.avg) >= 3 ? '🔴 Indisciplinado' :
-                         parseFloat(cards.avg) >= 2 ? '🟠 Moderado' : '🟢 Limpio'}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Probability lines — Yellow */}
-                  <div className="bg-surface-800 rounded-xl p-3 space-y-2">
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-2">
-                      🟨 Líneas de Amarillas ({cards.matches} partidos)
-                    </p>
-                    {[
-                      { label: 'Más de 1 amarilla',  pct: Math.round((cards.over1Y / cards.matches) * 100) },
-                      { label: 'Más de 2 amarillas', pct: Math.round((cards.over2Y / cards.matches) * 100) },
-                      { label: 'Más de 3 amarillas', pct: Math.round((cards.over3Y / cards.matches) * 100) },
-                    ].map(({ label, pct }) => (
-                      <div key={label} className="flex items-center gap-2">
-                        <div className="w-[7px] h-[10px] bg-yellow-400 rounded-[1px] shrink-0" />
-                        <span className="text-[11px] text-slate-400 w-32 shrink-0">{label}</span>
-                        <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-700 ${
-                              pct >= 70 ? 'bg-yellow-500' : pct >= 50 ? 'bg-yellow-400' : 'bg-yellow-300'
-                            }`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] font-black text-yellow-500 w-8 text-right">{pct}%</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Probability lines — Red */}
-                  <div className="bg-surface-800 rounded-xl p-3 space-y-2">
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-2">
-                      🟥 Líneas de Rojas ({cards.matches} partidos)
-                    </p>
-                    {[
-                      { label: 'Al menos 1 roja', pct: Math.round((cards.over0R / cards.matches) * 100) },
-                    ].map(({ label, pct }) => (
-                      <div key={label} className="flex items-center gap-2">
-                        <div className="w-[7px] h-[10px] bg-red-600 rounded-[1px] shrink-0" />
-                        <span className="text-[11px] text-slate-400 w-32 shrink-0">{label}</span>
-                        <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-700 ${
-                              pct >= 30 ? 'bg-red-600' : pct >= 15 ? 'bg-red-500' : 'bg-red-400/60'
-                            }`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] font-black text-red-500 w-8 text-right">{pct}%</span>
-                      </div>
-                    ))}
-                    <p className="text-[9px] text-slate-600 text-center mt-1">
-                      En {cards.over0R} de {cards.matches} partidos recibió al menos 1 tarjeta roja · Máx: {cards.maxRed}
-                    </p>
-                  </div>
-
-                </div>
-              ) : (
-                <p className="text-xs text-slate-600 p-4 text-center">Sin datos de tarjetas</p>
-              )}
-            </SECTION>
-          ))}
-        </div>
-      )}
-
-      {/* ── CORNERS ── */}
-      {(analysis?.homeCornersAnalysis || analysis?.awayCornersAnalysis) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
-          {[
-            { label: fixture?.teams?.home?.name, corners: analysis.homeCornersAnalysis },
-            { label: fixture?.teams?.away?.name, corners: analysis.awayCornersAnalysis },
-          ].map(({ label, corners }) => (
-            <SECTION key={`corners-${label}`} icon={Activity} title={`🚩 Tiros de Esquina · ${label}`} id={`corners-${label}`}>
-              {corners ? (
-                <div>
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="text-center flex-1 border-r border-white/10">
-                      <p className="text-2xl font-bold font-mono text-white leading-none">{corners.avg}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Media p/p</p>
-                    </div>
-                    <div className="text-center flex-1">
-                      <p className="text-2xl font-bold font-mono text-slate-300 leading-none">{corners.max}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-wider">Máximo</p>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-surface-800 rounded-lg p-3">
-                    <p className="text-[10px] text-slate-500 uppercase tracking-widest text-center mb-3">Líneas de Córners (Basado en {corners.matches} partidos)</p>
                     <div className="grid grid-cols-3 gap-2">
-                       <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-green-500">{Math.round((corners.over3/corners.matches)*100)}%</p>
-                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 3</p>
-                       </div>
-                       <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-amber-500">{Math.round((corners.over4/corners.matches)*100)}%</p>
-                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 4</p>
-                       </div>
-                       <div className="bg-white/5 rounded px-2 py-2 text-center">
-                          <p className="text-sm font-black text-red-500">{Math.round((corners.over5/corners.matches)*100)}%</p>
-                          <p className="text-[9px] text-slate-400 uppercase mt-0.5">Más de 5</p>
-                       </div>
+                      <div className="flex flex-col items-center bg-white/5 p-2 rounded">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-wider mb-1">+1.5 Goles</span>
+                        <span className="text-base font-bold text-white">{split.over15Pct ?? 0}%</span>
+                      </div>
+                      <div className="flex flex-col items-center bg-white/5 p-2 rounded">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-wider mb-1">+2.5 Goles</span>
+                        <span className="text-base font-bold" style={{ color: (split.over25Pct >= 60) ? '#00ff88' : '#f59e0b' }}>
+                          {split.over25Pct ?? 0}%
+                        </span>
+                      </div>
+                      <div className="flex flex-col items-center bg-white/5 p-2 rounded">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-wider mb-1">+3.5 Goles</span>
+                        <span className="text-base font-bold text-slate-300">{split.over35Pct ?? 0}%</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <p className="text-xs text-slate-600 p-4 text-center">Sin datos de tiros de esquina</p>
-              )}
-            </SECTION>
-          ))}
-        </div>
-      )}
-
-      {/* ── LESIONES ── */}
-      {injuries.length > 0 && (
-        <SECTION icon={Shield} title="🚑 Lesiones y bajas" id="injuries">
-          <div className="grid grid-cols-1 gap-2">
-            {injuries.slice(0, 10).map((inj, i) => (
-              <div key={i} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
-                <div className="flex items-center gap-2">
-                  {inj.player?.photo && (
-                    <img src={inj.player.photo} alt="" className="w-6 h-6 rounded-full object-cover" />
-                  )}
-                  <div>
-                    <p className="text-xs font-semibold text-slate-200">{inj.player?.name}</p>
-                    <p className="text-[10px] text-slate-600">{inj.team?.name}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <span className="badge-red text-[9px]">{inj.player?.reason || '–'}</span>
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
-
-        </SECTION>
-      )}
-
-      {/* ── PREDICCIÓN EXTERNA ── */}
-      {prediction && (
-        <SECTION icon={Target} title="Predicción Externa" id="prediction">
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            <div className="text-center rounded-lg p-3" style={{ background: 'rgba(0,255,136,0.07)', border: '1px solid rgba(0,255,136,0.15)' }}>
-              <p className="text-xl font-bold text-accent-green font-mono">
-                {prediction.predictions?.percent?.home ?? '–'}
-              </p>
-              <p className="text-[10px] text-slate-500">Local gana</p>
-            </div>
-            <div className="text-center rounded-lg p-3" style={{ background: 'rgba(255,215,0,0.07)', border: '1px solid rgba(255,215,0,0.15)' }}>
-              <p className="text-xl font-bold text-amber-400 font-mono">
-                {prediction.predictions?.percent?.draw ?? '–'}
-              </p>
-              <p className="text-[10px] text-slate-500">Empate</p>
-            </div>
-            <div className="text-center rounded-lg p-3" style={{ background: 'rgba(255,71,87,0.07)', border: '1px solid rgba(255,71,87,0.15)' }}>
-              <p className="text-xl font-bold text-accent-red font-mono">
-                {prediction.predictions?.percent?.away ?? '–'}
-              </p>
-              <p className="text-[10px] text-slate-500">Visitante</p>
-            </div>
-          </div>
-          {prediction.predictions?.advice && (
-            <p className="text-xs text-slate-400 italic border-l-2 border-accent-green/40 pl-3">
-              "{prediction.predictions.advice}"
-            </p>
+            </SECTION>
           )}
-          {prediction.predictions?.winner?.name && (
-            <p className="text-xs text-slate-300 mt-2">
-              Ganador predicho: <strong className="text-white">{prediction.predictions.winner.name}</strong>
-            </p>
+
+          {/* ── H2H ── */}
+          <SECTION icon={Users} title="H2H · Historial" id="h2h">
+            <H2HTable matches={h2hMatches} homeId={homeId} awayId={awayId} />
+          </SECTION>
+
+          {/* ── Disciplina ── */}
+          {(analysis?.homeCardsAnalysis || analysis?.awayCardsAnalysis) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[
+                { label: fixture?.teams?.home?.name, cards: analysis.homeCardsAnalysis },
+                { label: fixture?.teams?.away?.name, cards: analysis.awayCardsAnalysis },
+              ].map(({ label, cards }) => cards && (
+                <SECTION key={`cards-${label}`} icon={Shield} title={`Tarjetas · ${label}`} id={`cards-${label}`}>
+                  <div className="flex justify-between items-center bg-black/20 p-2 rounded mb-1">
+                    <span className="text-xs text-slate-400">Media por partido</span>
+                    <span className="text-sm font-bold text-amber-500">{cards?.avg}</span>
+                  </div>
+                  <div className="flex justify-between items-center bg-black/20 p-2 rounded">
+                    <span className="text-xs text-slate-400">Partidos con +3 tarjetas</span>
+                    <span className="text-sm font-bold text-red-400">{cards?.over3 ?? '-'}</span>
+                  </div>
+                </SECTION>
+              ))}
+            </div>
           )}
-        </SECTION>
+
+          {/* ── Tiros de Esquina ── */}
+          {(analysis?.homeCornersAnalysis || analysis?.awayCornersAnalysis) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[
+                { label: fixture?.teams?.home?.name, corners: analysis.homeCornersAnalysis },
+                { label: fixture?.teams?.away?.name, corners: analysis.awayCornersAnalysis },
+              ].map(({ label, corners }) => corners && (
+                <SECTION key={`corners-${label}`} icon={Target} title={`Córners a favor · ${label}`} id={`corners-${label}`}>
+                  <div className="flex justify-between items-center bg-black/20 p-2 rounded mb-1">
+                    <span className="text-xs text-slate-400">Media por partido</span>
+                    <span className="text-sm font-bold text-accent-green">{corners?.avg}</span>
+                  </div>
+                  <div className="flex justify-between items-center bg-black/20 p-2 rounded">
+                    <span className="text-xs text-slate-400">Partidos con +4 córners</span>
+                    <span className="text-sm font-bold text-white">{corners?.over4 ?? '-'}</span>
+                  </div>
+                </SECTION>
+              ))}
+            </div>
+          )}
+
+          {/* ── Goles por tiempo ── */}
+          {(analysis?.homeSlots?.some(s => s.goals > 0) || analysis?.awaySlots?.some(s => s.goals > 0)) && (
+            <SECTION icon={Clock} title="Goles por tiempo" id="goals-time">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <GoalTimeline slots={analysis.homeSlots} teamName={fixture?.teams?.home?.name} />
+                <GoalTimeline slots={analysis.awaySlots} teamName={fixture?.teams?.away?.name} />
+              </div>
+            </SECTION>
+          )}
+
+          {/* ── Lesiones ── */}
+          {injuries.length > 0 && (
+            <SECTION icon={Shield} title="🚑 Lesiones y bajas" id="injuries">
+              <div className="grid grid-cols-1 gap-2">
+                {injuries.slice(0, 10).map((inj, i) => (
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+                    <div className="flex items-center gap-2">
+                      {inj.player?.photo && (
+                        <img src={inj.player.photo} alt="" className="w-6 h-6 rounded-full object-cover" />
+                      )}
+                      <div>
+                        <p className="text-xs font-semibold text-slate-200">{inj.player?.name}</p>
+                        <p className="text-[10px] text-slate-600">{inj.team?.name}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="badge-red text-[9px]">{inj.player?.reason || '–'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </SECTION>
+          )}
+
+        </div>
       )}
 
     </div>

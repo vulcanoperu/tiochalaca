@@ -1,39 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Activity, ChevronRight } from 'lucide-react';
 
-// ── Tarjeta de árbitro (Minimalista) ──────────────────────────────────────────
-function CardBadge({ color = 'red', count = 1 }) {
-  const bg = color === 'red' ? '#ff4757' : '#fbbf24';
-  return (
-    <div
-      className="w-[9px] h-[12px] rounded-[1px] flex items-center justify-center relative shrink-0 shadow-sm"
-      style={{ background: bg }}
-    >
-      {count > 1 && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-black text-white opacity-90 leading-none">
-          {count}
-        </span>
-      )}
-    </div>
-  );
-}
-
-// ── Estado del partido (Vibrante) ──────────────────────────────────────────
-function StatusBadge({ status, elapsed }) {
-  if (['1H', '2H', 'ET'].includes(status)) {
-    return (
-      <span className="badge-red gap-2 shadow-[0_0_15px_rgba(255,71,87,0.15)] px-3 py-1.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-        <span className="font-numbers tracking-tight text-xs">{elapsed}'</span>
-      </span>
-    );
-  }
-  if (status === 'HT') return <span className="badge-yellow">HT</span>;
-  if (status === 'FT') return <span className="badge-gray px-3">FINALIZADO</span>;
-  return null;
-}
-
-// ── MatchCard Principal (Con Respiro y Color) ──────────────────────────────────
 export default function MatchCard({ fixture, onClick, hideLeague = false }) {
   const navigate = useNavigate();
   const { fixture: f, teams, goals, league } = fixture;
@@ -50,113 +16,62 @@ export default function MatchCard({ fixture, onClick, hideLeague = false }) {
     else navigate(`/analysis/${f.id}`);
   };
 
-  const homeGoals = goals?.home ?? (isFinished || isLive ? 0 : null);
-  const awayGoals = goals?.away ?? (isFinished || isLive ? 0 : null);
-  const showScore = isLive || isFinished;
-
-  // Acento lateral basado en estado
-  const accentClass = isLive ? 'bg-accent-green' : isFinished ? 'bg-slate-700' : 'bg-accent-green';
-
-  const formatTeamName = (name) => {
-    if (!name) return '';
-    return name.toLowerCase().split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-  };
-
+  const homeGoals = goals?.home ?? (isFinished || isLive ? 0 : '');
+  const awayGoals = goals?.away ?? (isFinished || isLive ? 0 : '');
+  
   return (
     <button
       onClick={handleClick}
       id={`match-${f?.id}`}
-      className="group relative w-full text-left glass-card-light-hover rounded-2xl transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl overflow-hidden"
+      className="w-full text-left group flex flex-col py-4 px-2 border-b border-white/[0.05] hover:bg-white/[0.02] transition-colors duration-300 first:border-t"
     >
-      <div className="p-6 md:p-8">
-        {/* Header: Liga + Hora/Estado */}
-        <div className="flex items-center justify-between mb-5">
-          {!hideLeague ? (
-            <div className="flex items-center gap-3 opacity-40 group-hover:opacity-100 transition-opacity">
-              {league?.logo && (
-                <img src={league.logo} alt="" className="w-4 h-4 object-contain grayscale brightness-200" />
-              )}
-              <span className="text-[11px] font-bold truncate max-w-[140px]">
-                {league?.name}
-              </span>
-            </div>
-          ) : <div />}
+      {/* Top Meta info */}
+      <div className="flex justify-between items-center mb-3">
+        <span className="text-[11px] font-medium text-white/30 tracking-wider">
+          {hideLeague ? 'MATCH' : league?.name}
+        </span>
+        <div className="flex items-center gap-2">
+          {isLive && <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />}
+          <span className={`text-[11px] font-medium ${isLive ? 'text-green-500' : 'text-white/30'}`}>
+            {isLive ? `${elapsed}'` : isFinished ? 'FT' : kickoff}
+          </span>
+        </div>
+      </div>
 
-          <div className="shrink-0">
-            {isLive ? (
-              <StatusBadge status={status} elapsed={elapsed} />
-            ) : isFinished ? (
-              <StatusBadge status="FT" />
+      {/* Teams Container */}
+      <div className="flex flex-col gap-2">
+        {/* Home Team */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {teams?.home?.logo ? (
+              <img src={teams.home.logo} alt="" className="w-5 h-5 object-contain opacity-60 group-hover:opacity-100 transition-opacity" />
             ) : (
-              <div className="flex items-center gap-2 text-accent-green font-numbers font-bold text-[15px]">
-                {kickoff}
-              </div>
+              <div className="w-5 h-5 opacity-30 text-[10px]">{teams?.home?.name?.[0]}</div>
             )}
+            <span className="text-[15px] font-normal text-white/80 group-hover:text-white transition-colors">
+              {teams?.home?.name}
+            </span>
           </div>
+          <span className={`text-[15px] font-medium ${isLive ? 'text-green-500' : 'text-white/90'}`}>
+            {homeGoals}
+          </span>
         </div>
 
-        {/* Equipos + Marcador (List Layout) */}
-        <div className="flex flex-col gap-4">
-          
-          {/* Local */}
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-white/[0.03] border border-white/[0.05] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-500">
-              {teams?.home?.logo ? (
-                <img src={teams.home.logo} alt="" className="w-6 h-6 object-contain drop-shadow-md" />
-              ) : (
-                <span className="text-sm font-black text-slate-700">{teams?.home?.name?.[0]}</span>
-              )}
-            </div>
-            <span className="text-[17px] font-black tracking-tight text-slate-200 flex-1 break-words leading-tight">
-              {formatTeamName(teams?.home?.name)}
-            </span>
-            {showScore && (
-              <span className={`text-2xl font-numbers font-black w-8 text-right ${isLive ? 'text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]' : 'text-slate-400'}`}>
-                {homeGoals}
-              </span>
+        {/* Away Team */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {teams?.away?.logo ? (
+              <img src={teams.away.logo} alt="" className="w-5 h-5 object-contain opacity-60 group-hover:opacity-100 transition-opacity" />
+            ) : (
+              <div className="w-5 h-5 opacity-30 text-[10px]">{teams?.away?.name?.[0]}</div>
             )}
-          </div>
-
-          {/* Visitante */}
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-white/[0.03] border border-white/[0.05] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-500">
-              {teams?.away?.logo ? (
-                <img src={teams.away.logo} alt="" className="w-6 h-6 object-contain drop-shadow-md" />
-              ) : (
-                <span className="text-sm font-black text-slate-700">{teams?.away?.name?.[0]}</span>
-              )}
-            </div>
-            <span className="text-[17px] font-black tracking-tight text-slate-200 flex-1 break-words leading-tight">
-              {formatTeamName(teams?.away?.name)}
+            <span className="text-[15px] font-normal text-white/80 group-hover:text-white transition-colors">
+              {teams?.away?.name}
             </span>
-            {showScore && (
-              <span className={`text-2xl font-numbers font-black w-8 text-right ${isLive ? 'text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]' : 'text-slate-400'}`}>
-                {awayGoals}
-              </span>
-            )}
           </div>
-        </div>
-
-        {/* Footer: Red Cards Indicator */}
-        {(fixture.redCards?.home > 0 || fixture.redCards?.away > 0) && (
-          <div className="mt-5 pt-4 border-t border-white/[0.03] flex items-center justify-center gap-12 animate-in">
-            <div className="flex gap-1.5 min-w-[24px] justify-center">
-              {fixture.redCards?.home > 0 && <CardBadge color="red" count={fixture.redCards.home} />}
-            </div>
-            <div className="w-px h-3 bg-white/5" />
-            <div className="flex gap-1.5 min-w-[24px] justify-center">
-              {fixture.redCards?.away > 0 && <CardBadge color="red" count={fixture.redCards.away} />}
-            </div>
-          </div>
-        )}
-
-        {/* CTA sutil que aparece en hover */}
-        <div className="mt-5 pt-4 border-t border-white/[0.03] flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity duration-500">
-           <span className="text-[13px] font-bold text-accent-green flex items-center gap-1">
-             <Activity size={14} />
-             Ver detalles
-             <ChevronRight size={14} />
-           </span>
+          <span className={`text-[15px] font-medium ${isLive ? 'text-green-500' : 'text-white/90'}`}>
+            {awayGoals}
+          </span>
         </div>
       </div>
     </button>

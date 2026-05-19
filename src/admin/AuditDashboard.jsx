@@ -83,7 +83,7 @@ export default function AuditDashboard() {
         const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
         const aGF = awayFormAway.total   >= 3 ? awayFormAway.goalsFor       / awayFormAway.total   : awayForm.goalsFor   / Math.max(awayForm.total, 1);
         const aGA = awayFormAway.total   >= 3 ? awayFormAway.goalsAgainst   / awayFormAway.total   : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
-        const poissonProbs = calcMatchProbabilities(hGF, hGA, aGF, aGA);
+        const poissonProbs = calcMatchProbabilities(hGF, hGA, aGF, aGA, f.league.name || '');
 
         const city = sumRes?.gameInfo?.venue?.address?.city || '';
 

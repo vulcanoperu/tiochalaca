@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Filter, Search, X, AlertCircle, Trophy, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { RefreshCw, Filter, Search, X, AlertCircle, Trophy, ChevronLeft, ChevronRight, ChevronDown, Calendar } from 'lucide-react';
+import AccessibleMatchCard from '../components/AccessibleMatchCard';
 import MatchCard from '../components/MatchCard';
 import Loader from '../components/Loader';
 import PendingWall from '../components/PendingWall';
@@ -15,37 +16,6 @@ function localDay(d = new Date()) {
   } catch (e) {
     return new Date().toISOString().split('T')[0];
   }
-}
-
-function buildDayStrip(centerDate) {
-  const days = [];
-  const isMay2026 = centerDate.getMonth() === 4 && centerDate.getFullYear() === 2026;
-
-  if (isMay2026) {
-    for (let i = 1; i <= 31; i++) {
-      const d = new Date(2026, 4, i);
-      days.push({
-        key:     localDay(d),
-        dayNum:  d.getDate(),
-        dayName: d.toLocaleDateString('es-PE', { weekday: 'short' }).slice(0, 2).toUpperCase(),
-        month:   d.toLocaleDateString('es-PE', { month: 'short' }),
-        isToday: localDay(d) === localDay(),
-      });
-    }
-  } else {
-    for (let i = -7; i <= 7; i++) {
-      const d = new Date(centerDate);
-      d.setDate(d.getDate() + i);
-      days.push({
-        key:     localDay(d),
-        dayNum:  d.getDate(),
-        dayName: d.toLocaleDateString('es-PE', { weekday: 'short' }).slice(0, 2).toUpperCase(),
-        month:   d.toLocaleDateString('es-PE', { month: 'short' }),
-        isToday: localDay(d) === localDay(),
-      });
-    }
-  }
-  return days;
 }
 
 const LIVE_STATUSES = ['1H', '2H', 'ET', 'HT', 'P'];
@@ -78,7 +48,10 @@ const FINISHED_STATUSES = ['FT', 'AET', 'PEN'];
 export default function Home() {
   const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
   const today = localDay();
-  const [days] = useState(() => buildDayStrip(new Date()));
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = localDay(tomorrowDate);
+
   const [selected, setSelected] = useState(today);
   const [fixtures, setFixtures] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -164,50 +137,6 @@ export default function Home() {
     const id = setInterval(mergeLiveScores, 30_000);
     return () => clearInterval(id);
   }, [selected, today, mergeLiveScores]);
-
-  // ── Drag to scroll logic ──
-  useEffect(() => {
-    const slider = stripRef.current;
-    if (!slider) return;
-
-    let isDown = false;
-    let startX;
-    let scrollLeft;
-
-    const onMouseDown = (e) => {
-      isDown = true;
-      slider.classList.add('active');
-      startX = e.pageX - slider.offsetLeft;
-      scrollLeft = slider.scrollLeft;
-    };
-    const onMouseLeave = () => {
-      isDown = false;
-      slider.classList.remove('active');
-    };
-    const onMouseUp = () => {
-      isDown = false;
-      slider.classList.remove('active');
-    };
-    const onMouseMove = (e) => {
-      if (!isDown) return;
-      e.preventDefault();
-      const x = e.pageX - slider.offsetLeft;
-      const walk = (x - startX) * 2; // scroll-fast
-      slider.scrollLeft = scrollLeft - walk;
-    };
-
-    slider.addEventListener('mousedown', onMouseDown);
-    slider.addEventListener('mouseleave', onMouseLeave);
-    slider.addEventListener('mouseup', onMouseUp);
-    slider.addEventListener('mousemove', onMouseMove);
-
-    return () => {
-      slider.removeEventListener('mousedown', onMouseDown);
-      slider.removeEventListener('mouseleave', onMouseLeave);
-      slider.removeEventListener('mouseup', onMouseUp);
-      slider.removeEventListener('mousemove', onMouseMove);
-    };
-  }, []);
 
   const filtered = fixtures.filter(f => {
     // 1. Calcular fecha local del partido
@@ -390,32 +319,35 @@ export default function Home() {
     <div className="animate-in pb-20">
       
       {/* ── Hero / Header ── */}
-      <div className="relative mb-16 pt-8">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
-          <div className="relative z-10">
-            <h1 className="text-4xl font-black tracking-tighter text-gradient-white mb-3">
-              {selectedLabel}
-            </h1>
-            <div className="flex items-center gap-6 text-xs font-black uppercase tracking-[0.2em] text-slate-500">
+      {/* ── Hero / Header Simplificado ── */}
+      <div className="relative mb-12 pt-8">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-8">
+          
+          <div className="relative z-10 flex-1">
+            <div className="flex items-center gap-6 text-sm font-black uppercase tracking-[0.2em] text-slate-500 mb-6">
               <span className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
+                <div className="w-2 h-2 rounded-full bg-slate-700" />
                 {fixtures.length} Partidos
               </span>
               {liveMatches.length > 0 && (
                 <span className="flex items-center gap-2 text-accent-green">
-                  <div className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />
+                  <div className="w-2 h-2 rounded-full bg-accent-green animate-pulse" />
                   {liveMatches.length} En Vivo
                 </span>
               )}
               {lastUpdated && <span className="opacity-40">Act. {lastUpdated.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}</span>}
             </div>
+
+            {/* (Selector Hoy/Mañana ha sido eliminado) */}
           </div>
-          <div className="flex items-center gap-3 relative z-20">
+
+          {/* Buscador y Filtros */}
+          <div className="flex flex-col sm:flex-row items-center gap-4 relative z-20 shrink-0">
 
             {/* ── Search ── */}
-            <div className="relative group">
+            <div className="relative group w-full sm:w-auto">
               <Search
-                size={13}
+                size={16}
                 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-[#BFF102] transition-all duration-300"
               />
               <input
@@ -423,21 +355,20 @@ export default function Home() {
                  onChange={e => setSearch(e.target.value)}
                  placeholder="Buscar equipo o liga..."
                  className="
-                  h-9 pl-10 pr-4 rounded-full text-[13px] font-medium
+                  h-14 pl-12 pr-4 rounded-2xl text-[15px] font-bold w-full sm:w-56
                   bg-white/5 backdrop-blur-md
                   border border-white/8
-                  text-slate-300 placeholder-slate-600
+                  text-slate-100 placeholder-slate-500
                   focus:outline-none focus:bg-white/10
                   focus:border-[#72BF01]/50
-                  focus:shadow-[0_0_0_3px_rgba(114,191,1,0.12)]
-                  w-44 focus:w-64
+                  focus:shadow-[0_0_0_4px_rgba(114,191,1,0.12)]
                   transition-all duration-400 ease-in-out
                 "
               />
               {search && (
                 <button
                   onClick={() => setSearch('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-300 transition-colors"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors bg-white/10 p-1 rounded-full"
                 >
                   <X size={14} />
                 </button>
@@ -445,96 +376,85 @@ export default function Home() {
             </div>
 
             {/* ── League Dropdown ── */}
-            <div className="relative" ref={dropdownRef}>
-              {/* Trigger */}
+            <div className="relative w-full sm:w-auto" ref={dropdownRef}>
               <button
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                 className={`
-                  h-9 w-44 flex items-center justify-between pl-4 pr-3 rounded-full text-[13px] font-semibold
-                  border transition-all duration-300 cursor-pointer
+                  h-14 w-full sm:w-56 flex items-center justify-between px-5 rounded-2xl text-[15px] font-bold
+                  border transition-all duration-300 cursor-pointer shadow-lg
                   ${isDropdownOpen
                     ? 'bg-[#72BF01]/15 border-[#72BF01]/40 text-[#BFF102]'
-                    : 'bg-white/5 border-white/8 text-slate-400 hover:bg-white/8 hover:border-white/15 hover:text-slate-200'}
+                    : 'bg-white/5 border-white/8 text-slate-300 hover:bg-white/8 hover:border-white/15 hover:text-white'}
                 `}
               >
-                <div className="flex items-center gap-2 overflow-hidden">
-                  <Filter size={14} className="shrink-0" />
-                  <span className="truncate">
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <Filter size={18} className="shrink-0" />
+                  <span className="truncate uppercase tracking-wider">
                   {leagueFilter === 'all'
-                    ? 'Todas las ligas'
-                    : presentLeagues.find(l => l?.id === leagueFilter)?.name
-                        ?.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-                    || 'Todas las ligas'}
+                    ? 'Ligas: Todas'
+                    : presentLeagues.find(l => l?.id === leagueFilter)?.name || 'Todas'}
                 </span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {leagueFilter !== 'all' && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#BFF102]" />
+                    <span className="w-2 h-2 rounded-full bg-[#BFF102]" />
                   )}
                 <ChevronDown
-                  size={14}
+                  size={16}
                   className={`shrink-0 transition-transform duration-300 ${isDropdownOpen ? 'rotate-180' : ''}`}
                 />
                 </div>
               </button>
 
-              {/* Panel */}
+              {/* Panel Dropdown Ligas */}
               {isDropdownOpen && (
                 <div className="
-                  absolute z-50 right-0 top-full mt-2 w-72
-                  bg-[#071f13] border border-white/[0.07] rounded-2xl
-                  shadow-[0_24px_60px_rgba(0,0,0,0.6)]
+                  absolute z-50 right-0 top-full mt-3 w-[320px]
+                  bg-surface-950 border border-white/10 rounded-2xl
+                  shadow-[0_30px_80px_rgba(0,0,0,0.8)]
                   overflow-hidden
                   animate-in fade-in slide-in-from-top-2 duration-200
                 ">
-                  {/* Panel header */}
-                  <div className="px-5 py-3.5 border-b border-white/5 flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-600">Liga</span>
+                  <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+                    <span className="text-[11px] font-black uppercase tracking-[0.25em] text-slate-500">Filtrar por Liga</span>
                     {leagueFilter !== 'all' && (
                       <button
                         onClick={() => { setLeagueFilter('all'); setIsDropdownOpen(false); }}
-                        className="text-[10px] text-[#72BF01] hover:text-[#BFF102] font-semibold transition-colors"
+                        className="text-[11px] bg-accent-green/10 px-2 py-1 rounded text-[#BFF102] hover:bg-accent-green/20 font-bold uppercase tracking-widest transition-colors"
                       >
                         Limpiar
                       </button>
                     )}
                   </div>
 
-                  {/* Scrollable list */}
-                  <div className="max-h-[65vh] overflow-y-auto py-2">
-                    {/* All option */}
+                  <div className="max-h-[60vh] overflow-y-auto py-2">
                     <button
                       onClick={() => { setLeagueFilter('all'); setIsDropdownOpen(false); }}
-                      className={`w-full flex items-center justify-between px-5 py-2.5 text-[17px] transition-all duration-150 ${
+                      className={`w-full flex items-center justify-between px-6 py-3.5 text-base transition-all duration-150 ${
                         leagueFilter === 'all'
-                          ? 'text-[#BFF102] font-bold bg-[#BFF102]/8'
-                          : 'text-slate-300 hover:text-white hover:bg-white/4'
+                          ? 'text-surface-900 font-black bg-accent-green'
+                          : 'text-slate-300 hover:text-white hover:bg-white/5 font-bold'
                       }`}
                     >
-                      <span className="font-semibold">Todas las ligas</span>
-                      {leagueFilter === 'all' && <div className="w-2 h-2 rounded-full bg-[#BFF102]" />}
+                      <span className="uppercase tracking-wider">TODAS LAS LIGAS</span>
                     </button>
 
-                    {/* Grouped leagues */}
                     {sortedGroups.map(group => (
-                      <div key={group} className="mt-7">
-                        <div className="mx-3 mb-0.5 mt-1 px-3 py-2 flex items-center gap-2.5 rounded-lg bg-white/[0.03] border-l-2 border-[#72BF01]/60">
-                          <span className="text-[12px] font-black uppercase tracking-[0.3em] text-[#72BF01]/80">{group}</span>
+                      <div key={group} className="mt-6 mb-2">
+                        <div className="mx-4 mb-2 px-3 py-1.5 flex items-center gap-2 border-b border-white/5">
+                          <span className="text-[11px] font-black uppercase tracking-[0.3em] text-[#72BF01]/80">{group}</span>
                         </div>
                         {groupedLeagues[group].map(l => (
                           <button
                             key={l?.id}
                             onClick={() => { setLeagueFilter(l?.id); setIsDropdownOpen(false); }}
-                            className={`w-full flex items-center justify-between pl-12 pr-5 py-0.5 text-[17px] transition-all duration-150 ${
+                            className={`w-full flex items-center justify-between pl-8 pr-6 py-2 text-base transition-all duration-150 ${
                               leagueFilter === l?.id
-                                ? 'text-[#BFF102] font-bold bg-[#BFF102]/8'
-                                : 'text-slate-300 hover:text-white hover:bg-white/4'
+                                ? 'text-surface-900 font-black bg-accent-green'
+                                : 'text-slate-400 hover:text-white hover:bg-white/5 font-semibold'
                             }`}
                           >
-                            <span className="truncate font-medium">
-                              {l?.name?.toLowerCase().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
-                            </span>
-                            {leagueFilter === l?.id && <div className="w-2 h-2 rounded-full bg-[#BFF102] shrink-0" />}
+                            <span className="truncate">{l?.name}</span>
                           </button>
                         ))}
                       </div>
@@ -548,59 +468,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ── Days Strip ── */}
-      <div className="relative mb-12 group">
-        <div 
-          ref={stripRef} 
-          className="flex gap-4 overflow-x-auto scrollbar-hide py-8 px-4 -my-8 -mx-4 cursor-grab active:cursor-grabbing select-none"
-        >
-          {days.map(({ key, dayNum, dayName, month, isToday }) => {
-            const isSelected = key === selected;
-            return (
-              <button
-                key={key}
-                onClick={() => setSelected(key)}
-                className={`flex flex-col items-center min-w-[72px] py-5 rounded-lg border transition-all duration-300 ${
-                  isSelected 
-                    ? 'bg-[#BFF102] border-[#BFF102] text-[#00312D] scale-105 shadow-2xl' 
-                    : isToday 
-                      ? 'bg-accent-green/5 border-accent-green/20 text-accent-green hover:bg-accent-green/10'
-                      : 'bg-[#3A7817] border-transparent text-[#EAFDE7]/50 hover:border-[#EAFDE7]/20 hover:text-[#EAFDE7]'
-                }`}
-              >
-                <span className={`text-[10px] font-bold mb-2 ${isSelected ? 'opacity-60' : ''}`}>{dayName.charAt(0) + dayName.slice(1).toLowerCase()}</span>
-                <span className="text-xl font-black leading-none">{dayNum}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Tabs ── */}
-      <div className="flex gap-8 mb-16 border-b border-white/[0.05] overflow-x-auto scrollbar-hide">
-        {[
-          { id: 'all', label: 'Dashboard' },
-          { id: 'live', label: 'En Vivo', count: liveMatches.length, color: 'text-accent-green' },
-          { id: 'upcoming', label: 'Próximos', count: upcomingMatches.length, color: 'text-accent-blue' },
-          { id: 'finished', label: 'Finalizados', count: finishedMatches.length },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`group relative pb-5 text-xs font-black uppercase tracking-[0.2em] transition-all ${
-              activeTab === tab.id ? (tab.color || 'text-white') : 'text-slate-600 hover:text-slate-400'
-            }`}
-          >
-            <span className="flex items-center gap-2">
-              {tab.label}
-              {tab.count > 0 && <span className="text-[10px] opacity-40 group-hover:opacity-100">[{tab.count}]</span>}
-            </span>
-            {activeTab === tab.id && (
-              <div className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full ${tab.id === 'live' ? 'bg-accent-green' : tab.id === 'upcoming' ? 'bg-accent-blue' : 'bg-white'}`} />
-            )}
-          </button>
-        ))}
-      </div>
+      {/* ── Tabs Removidos ── */}
 
       {/* ── Content ── */}
       {loading ? <Loader /> : (
@@ -664,6 +532,8 @@ export default function Home() {
   );
 }
 
+// ... in the file, we only need to replace the usage in the Section component
+
 function Section({ title, groups, accent }) {
   const accentClass = accent === 'green' ? 'text-accent-green' : accent === 'blue' ? 'text-accent-blue' : 'text-slate-500';
   const dotClass = accent === 'green' ? 'bg-accent-green shadow-[0_0_10px_#00ff88]' : accent === 'blue' ? 'bg-accent-blue' : 'bg-slate-700';
@@ -672,18 +542,18 @@ function Section({ title, groups, accent }) {
     <div className={`relative ${accent === 'green' ? 'glow-soft-green' : accent === 'blue' ? 'glow-soft-blue' : ''}`}>
       <div className="flex items-center gap-6 mb-10">
         <div className={`w-2 h-2 rounded-full ${dotClass}`} />
-        <h2 className={`text-base font-bold ${accentClass}`}>{title}</h2>
+        <h2 className={`text-2xl font-bold ${accentClass}`}>{title}</h2>
         <div className="flex-1 h-px bg-white/[0.05]" />
       </div>
       <div className="space-y-16">
         {groups.map(({ league, matches }) => (
           <div key={league?.id} className="animate-in">
-            <div className="flex items-center gap-3 mb-6 opacity-60 hover:opacity-100 transition-opacity">
-              {league?.logo && <img src={league.logo} alt="" className="w-4 h-4 object-contain grayscale brightness-200" />}
-              <span className="text-[11px] font-black uppercase tracking-widest text-slate-400">{league?.name}</span>
+            <div className="flex items-center gap-4 mb-8 opacity-80 hover:opacity-100 transition-opacity">
+              {league?.logo && <img src={league.logo} alt="" className="w-6 h-6 object-contain grayscale brightness-200" />}
+              <span className="text-sm font-black uppercase tracking-widest text-slate-300">{league?.name}</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {matches.map(f => <MatchCard key={f.fixture?.id} fixture={f} hideLeague={true} />)}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 md:gap-12">
+              {matches.map(f => <AccessibleMatchCard key={f.fixture?.id} fixture={f} />)}
             </div>
           </div>
         ))}

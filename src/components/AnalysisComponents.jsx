@@ -114,83 +114,77 @@ function ProbCircle({ prob, label, color = '#00ff88' }) {
 }
 
 /**
- * Goal timeline bar chart (by time slots)
+ * Goal timeline heatmap (by time slots)
  */
-function GoalTimeline({ slots, color = '#00ff88', actualGoals = 0 }) {
-  const half1 = slots.slice(0, 3);
-  const half2 = slots.slice(3, 6);
-  const totalMatchGoals    = slots.reduce((a, s) => a + s.goals, 0);
-  const totalMatchConceded = slots.reduce((a, s) => a + s.conceded, 0);
+function GoalTimeline({ slots, teamName }) {
+  const totalScored = slots.reduce((a, s) => a + s.goals, 0);
+  const totalConceded = slots.reduce((a, s) => a + s.conceded, 0);
 
-  const isMissingData = (actualGoals > 0 && totalMatchGoals === 0) || (actualGoals > 0 && (totalMatchGoals / actualGoals) < 0.30);
-
-  if (isMissingData) {
+  if (totalScored === 0 && totalConceded === 0) {
     return (
       <div className="text-center py-6 bg-transparent border border-white/5 border-dashed mt-2 rounded-lg">
-        <p className="text-[11px] text-slate-500">Sin datos detallados de minutos para estos partidos.</p>
+        <p className="text-[11px] text-slate-500">Sin datos de minutos disponibles.</p>
       </div>
     );
   }
 
-  const renderSimpleSlot = (slot) => {
-    const maxVal = Math.max(5, slot.goals, slot.conceded);
-    const gWidth = maxVal > 0 ? (slot.goals / maxVal) * 100 : 0;
-    const cWidth = maxVal > 0 ? (slot.conceded / maxVal) * 100 : 0;
+  const maxScored = Math.max(...slots.map(s => s.goals), 1);
+  const maxConceded = Math.max(...slots.map(s => s.conceded), 1);
 
-    return (
-      <div key={slot.key} className="flex items-center py-2 border-b border-white/5 last:border-0">
-        <span className="w-12 text-[10px] text-slate-500 font-mono">{slot.label}</span>
-        <div className="flex-1 flex items-center justify-center gap-3">
-          <div className="flex-1 flex items-center justify-end gap-2">
-            <span className="text-[11px] font-bold text-slate-300">{slot.goals > 0 ? slot.goals : '-'}</span>
-            <div className="w-10 sm:w-16 h-[3px] bg-transparent flex justify-end items-center">
-              {slot.goals > 0 && <div className="h-full bg-accent-green rounded-full opacity-80" style={{ width: `${gWidth}%` }}></div>}
-            </div>
-          </div>
-          <div className="w-[1px] h-3 bg-white/10"></div>
-          <div className="flex-1 flex items-center justify-start gap-2">
-            <div className="w-10 sm:w-16 h-[3px] bg-transparent flex justify-start items-center">
-              {slot.conceded > 0 && <div className="h-full bg-accent-red rounded-full opacity-80" style={{ width: `${cWidth}%` }}></div>}
-            </div>
-            <span className="text-[11px] font-bold text-slate-300">{slot.conceded > 0 ? slot.conceded : '-'}</span>
-          </div>
-        </div>
+  const renderTrack = (type, title, total, maxVal, colorRGB) => (
+    <div className="mb-6 relative">
+      <div className="flex justify-between items-center mb-1.5 px-1">
+        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: `rgb(${colorRGB})` }}>
+          {title} ({total})
+        </span>
       </div>
-    );
-  };
+      <div className="relative flex h-10 gap-1 bg-black/20 p-1 rounded-lg border border-white/5">
+        {slots.map((slot) => {
+          const val = type === 'scored' ? slot.goals : slot.conceded;
+          const intensity = val / maxVal;
+          const bgOpacity = val === 0 ? 0.03 : 0.15 + (intensity * 0.85);
+          const textColor = val === 0 
+            ? 'text-transparent' 
+            : (type === 'scored' && intensity > 0.6 ? 'text-slate-900 font-black' : 'text-white font-bold');
 
-  const renderHalf = (title, halfSlots) => {
-    const totalGoals    = halfSlots.reduce((a, s) => a + s.goals, 0);
-    const totalConceded = halfSlots.reduce((a, s) => a + s.conceded, 0);
-    const goalsPct    = totalMatchGoals    > 0 ? Math.round((totalGoals    / totalMatchGoals)    * 100) : 0;
-    const concededPct = totalMatchConceded > 0 ? Math.round((totalConceded / totalMatchConceded) * 100) : 0;
+          return (
+            <div key={slot.key} className="flex-1 flex flex-col relative group">
+              <div 
+                className="w-full h-full rounded-[4px] transition-all duration-300 flex items-center justify-center cursor-default" 
+                style={{ backgroundColor: `rgba(${colorRGB}, ${bgOpacity})` }}
+              >
+                <span className={`text-[12px] ${textColor}`}>
+                  {val > 0 ? val : ''}
+                </span>
+              </div>
+              
+              {/* Tooltip */}
+              <div className="absolute -top-8 left-1/2 -translate-x-1/2 text-[10px] bg-black/95 px-2.5 py-1 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none border border-white/10 z-10 shadow-xl">
+                {slot.label}: <strong style={{ color: `rgb(${colorRGB})` }}>{val}</strong> goles
+              </div>
 
-    return (
-      <div className="mb-5">
-        <div className="flex flex-col mb-2 px-1">
-          <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">{title}</span>
-          <div className="flex items-center gap-4 text-[10px]">
-            <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-green opacity-80"></span>
-              <span className="text-slate-400">Anotó: <strong className="text-slate-200">{totalGoals}</strong> ({goalsPct}%)</span>
+              {/* Minute Label */}
+              <span className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[9px] text-slate-500 font-mono">
+                {slot.key.split('-')[1]}'
+              </span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-red opacity-80"></span>
-              <span className="text-slate-400">Recibió: <strong className="text-slate-200">{totalConceded}</strong> ({concededPct}%)</span>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white/[0.015] rounded-lg border border-white/5 px-3 py-1">
-          {halfSlots.map(renderSimpleSlot)}
-        </div>
+          );
+        })}
+        {/* Half-time separator */}
+        <div className="absolute top-0 bottom-0 left-1/2 w-[1px] bg-white/10 -translate-x-1/2 pointer-events-none"></div>
       </div>
-    );
-  };
+    </div>
+  );
 
   return (
-    <div className="mt-3">
-      {renderHalf('1er Tiempo', half1)}
-      {renderHalf('2do Tiempo', half2)}
+    <div className="mt-4 pb-2 px-1">
+      {renderTrack('scored', 'Goles a Favor', totalScored, maxScored, '0, 255, 136')}
+      {renderTrack('conceded', 'Goles en Contra', totalConceded, maxConceded, '255, 51, 102')}
+      
+      <div className="flex justify-between px-1 text-[9px] text-slate-500 uppercase tracking-widest mt-3">
+        <span>1er Tiempo</span>
+        <span>2do Tiempo</span>
+      </div>
     </div>
   );
 }
@@ -293,12 +287,25 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
       }
     };
 
-    const accent =
-      pick.probability >= 85
-        ? { color: '#00ff88', bg: 'rgba(0,255,136,0.06)', border: 'rgba(0,255,136,0.18)' }
-        : pick.probability >= 75
-        ? { color: '#3b9eff', bg: 'rgba(59,158,255,0.06)', border: 'rgba(59,158,255,0.18)' }
-        : { color: '#f59e0b', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.18)' };
+    let accent;
+    if (pick.category === 'segura' || pick.tier === '🟢') {
+      accent = { color: '#10b981', bg: 'rgba(16,185,129,0.06)', border: 'rgba(16,185,129,0.18)' };
+    } else if (pick.category === 'valor' || pick.tier === '💎') {
+      accent = { color: '#3b9eff', bg: 'rgba(59,158,255,0.06)', border: 'rgba(59,158,255,0.18)' };
+    } else if (pick.probability >= 85) {
+      accent = { color: '#00ff88', bg: 'rgba(0,255,136,0.06)', border: 'rgba(0,255,136,0.18)' };
+    } else if (pick.probability >= 75) {
+      accent = { color: '#3b9eff', bg: 'rgba(59,158,255,0.06)', border: 'rgba(59,158,255,0.18)' };
+    } else {
+      accent = { color: '#f59e0b', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.18)' };
+    }
+
+    let tierText = pick.tier;
+    if (pick.category === 'segura' || pick.tier === '🟢') tierText = '🟢 BANKER';
+    else if (pick.category === 'valor' || pick.tier === '💎') tierText = '💎 VALUE BET';
+    else if (pick.tier === '🔥') tierText = '🔥 ALTA CONFIANZA';
+    else if (pick.tier === '⭐') tierText = '⭐ BUENA OPCIÓN';
+    else if (pick.tier === '🔵') tierText = '🔵 SUGERIDA';
 
     return (
       <div
@@ -326,9 +333,9 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
           >
             {pick.probability}%
           </span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.2em] mt-2 opacity-60"
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em] mt-2 opacity-60 text-center"
             style={{ color: accent.color }}>
-            {pick.tier}
+            {tierText}
           </span>
         </div>
 

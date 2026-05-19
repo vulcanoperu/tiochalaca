@@ -9,6 +9,20 @@
     <title>TipsterPro · AI Football Analysis</title>
   </head>
   <body>
+    <div id="error-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); color:red; z-index:9999; padding:20px; font-family:monospace; overflow:auto;">
+      <h2>Critical Error</h2>
+      <pre id="error-msg"></pre>
+    </div>
+    <script>
+      window.onerror = function(msg, url, line, col, error) {
+        document.getElementById('error-overlay').style.display = 'block';
+        document.getElementById('error-msg').innerText += '\n' + msg + '\n' + (error && error.stack ? error.stack : '');
+      };
+      window.addEventListener('unhandledrejection', function(event) {
+        document.getElementById('error-overlay').style.display = 'block';
+        document.getElementById('error-msg').innerText += '\nUnhandled Promise: ' + event.reason;
+      });
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

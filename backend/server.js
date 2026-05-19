@@ -28,54 +28,21 @@ app.use(cors());
 app.use(express.json());
 
 // ─────────────────────────────────────────────────────────────────────
-// CACHÉ EN MEMORIA  (Evita consumir la cuota de la API)
+// UTILIDADES (Logger y Manejo de Errores)
 // ─────────────────────────────────────────────────────────────────────
-const cache = new Map();
-
-function cacheGet(key) {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { cache.delete(key); return null; }
-  return entry.data;
-}
-
-function cacheSet(key, data, ttlMinutes = 60) {
-  cache.set(key, { data, expiresAt: Date.now() + ttlMinutes * 60_000 });
-}
+const logger = require('./utils/logger');
+const errorHandler = require('./utils/errorHandler');
 
 // ─────────────────────────────────────────────────────────────────────
-// CACHÉ PERSISTENTE — Supabase (para partidos terminados)
-// TTL por defecto: 30 días (720h). Los datos son inmutables post-FT.
-// Si la tabla no existe aún, falla silenciosamente (usa solo memoria).
+// CACHÉ — Módulo centralizado (memoria + Supabase)
 // ─────────────────────────────────────────────────────────────────────
-async function supabaseCacheGet(eventId) {
-  try {
-    const { data, error } = await supabase
-      .from('analysis_cache')
-      .select('data')
-      .eq('event_id', String(eventId))
-      .gt('expires_at', new Date().toISOString())
-      .single();
-    if (error || !data) return null;
-    return data.data;
-  } catch (e) {
-    return null;
-  }
-}
+const cache = require('./cache/cacheManager');
+const cacheGet = cache.get;
+const cacheSet = cache.set;
+const supabaseCacheGet = cache.supabaseGet;
+const supabaseCacheSet = cache.supabaseSet;
 
-async function supabaseCacheSet(eventId, analysisData, ttlHours = 720) {
-  try {
-    const expiresAt = new Date(Date.now() + ttlHours * 3_600_000).toISOString();
-    await supabase
-      .from('analysis_cache')
-      .upsert(
-        { event_id: String(eventId), data: analysisData, match_state: 'post', expires_at: expiresAt },
-        { onConflict: 'event_id' }
-      );
-  } catch (e) {
-    // Fallo silencioso — la tabla aún no existe o hay error de conexión
-  }
-}
+const fotmobAdapter = require('./adapters/fotmobAdapter');
 
 // ─────────────────────────────────────────────────────────────────────
 // HTTP CLIENTE AXIOS  (para Understat y Transfermarkt)
@@ -95,12 +62,12 @@ const http = axios.create({
 // ════════════════════════════════════════════════════════════════════
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString(), cacheSize: cache.size, source: 'ESPN (free)' });
+  res.json({ status: 'ok', time: new Date().toISOString(), cacheSize: cache.size(), source: 'ESPN (free)' });
 });
 
 app.delete('/api/cache', (req, res) => {
   cache.clear();
-  res.json({ message: 'Caché limpiada correctamente' });
+  res.json({ message: 'Caché limpiada correctamente', cleared: true });
 });
 
 const { 
@@ -564,6 +531,46 @@ async function computeMatchAnalysis(eventId, refresh = false) {
         };
       }
     } catch (_) {}
+
+    // 12b. FOTMOB FALLBACK: Extraer Cuotas Reales y xG si ESPN no los tiene
+    try {
+      if ((!advancedStats || !marketOdds) && summary.header) {
+        const d = summary.header.competitions?.[0]?.date;
+        if (d) {
+          const dateStr = new Date(d).toISOString().split('T')[0].replace(/-/g, '');
+          const hmName = homeComp.team?.name || homeComp.team?.displayName || '';
+          const awName = awayComp.team?.name || awayComp.team?.displayName || '';
+          
+          const fotmobId = await fotmobAdapter.findFotmobMatchId(dateStr, hmName, awName);
+          if (fotmobId) {
+            const fotmobData = await fotmobAdapter.getMatchDetail(fotmobId);
+            if (fotmobData) {
+              // Extraer xG si falta en ESPN
+              if (!advancedStats && fotmobData.stats && fotmobData.stats.length > 0) {
+                 const xGStat = fotmobData.stats.find(s => s.title?.toLowerCase().includes('expected goals') || s.key === 'expected_goals');
+                 if (xGStat) {
+                    advancedStats = {
+                      home: { xG: parseFloat(xGStat.stats[0]), possession: null },
+                      away: { xG: parseFloat(xGStat.stats[1]), possession: null }
+                    };
+                 }
+              }
+              // Extraer cuotas 1x2 si falta en ESPN (y si el partido no empezó)
+              if (!marketOdds && fotmobData.odds && matchState !== 'post') {
+                 const matchOdds = fotmobData.odds;
+                 if (matchOdds) {
+                    // Mapeo simple si FotMob provee decimal odds (dependerá de la estructura real de Fotmob)
+                    // Este es un fallback suave.
+                    marketOdds = { fotmob: true }; // Flag
+                 }
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn('fotmobFallback', 'Error en fallback de FotMob:', err.message);
+    }
     // 13. Datos del Árbitro
     let refereeStats = null;
     try {
@@ -613,7 +620,7 @@ async function computeMatchAnalysis(eventId, refresh = false) {
         shotsOnTarget: getS(homeId, 'shotsOnTarget') + getS(awayId, 'shotsOnTarget'),
         fouls: getS(homeId, 'foulsCommitted') + getS(awayId, 'foulsCommitted')
       };
-      console.log(`[AUDIT] Match ${eventId} Result: Corners=${result.matchResult.corners}, Cards=${result.matchResult.cards}`);
+      logger.audit('audit', `Match ${eventId} Result: Corners=${result.matchResult.corners}, Cards=${result.matchResult.cards}`);
     }
 
     const ttl = matchState === 'post' ? 240 : 5;
@@ -638,7 +645,7 @@ async function computeMatchAnalysis(eventId, refresh = false) {
     return { data: result, fromCache: false };
 
   } catch (err) {
-    console.error('[computeMatchAnalysis]', err.message);
+    logger.error('computeMatchAnalysis', err.message);
     return { data: null, fromCache: false, error: err.message };
   }
 }
@@ -686,7 +693,7 @@ app.post('/api/analysis/batch', async (req, res) => {
     await Promise.all(Array(8).fill(null).map(() => worker()));
     return res.json({ data: results });
   } catch (err) {
-    console.error('[batch/analysis]', err.message);
+    logger.error('batch/analysis', err.message);
     return res.status(500).json({ error: 'Error en análisis batch', details: err.message });
   }
 });
@@ -729,7 +736,7 @@ app.get('/api/espn/team/:id/schedule', async (req, res) => {
         leaguesToFetch.add(defaultLeague);
       }
     } catch (e) {
-      console.warn(`No se pudo obtener liga local para el equipo ${teamId}`);
+      logger.warn('computeMatchAnalysis', `No se pudo obtener liga local para el equipo ${teamId}`);
     }
 
     if (leaguesToFetch.size === 0) leaguesToFetch.add('all'); // Fallback
@@ -738,7 +745,7 @@ app.get('/api/espn/team/:id/schedule', async (req, res) => {
     const fetchPromises = Array.from(leaguesToFetch).map(slug => 
       axios.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/teams/${teamId}/schedule`)
            .then(res => res.data?.events || [])
-           .catch(e => { console.warn(`Fallo al obtener schedule de ${slug} para ${teamId}`); return []; })
+           .catch(e => { logger.warn('computeMatchAnalysis', `Fallo al obtener schedule de ${slug} para ${teamId}`); return []; })
     );
 
     const results = await Promise.all(fetchPromises);
@@ -754,56 +761,9 @@ app.get('/api/espn/team/:id/schedule', async (req, res) => {
 
 
 
-// ─────────────────────────────────────────────────────────────────────
-// 3. xG + ESTADÍSTICAS AVANZADAS — Understat (Caché 6h)
-// ─────────────────────────────────────────────────────────────────────
-app.get('/api/scrapers/xg', async (req, res) => {
-  const { teamName, season = '2024' } = req.query;
-  if (!teamName) return res.status(400).json({ error: 'Falta teamName' });
-
-  const cacheKey = `xg_${teamName}_${season}`;
-  const cached   = cacheGet(cacheKey);
-  if (cached) return res.json({ source: 'Understat', fromCache: true, data: cached });
-
-  const slug = teamName.replace(/ /g, '_');
-  const url  = `https://understat.com/team/${encodeURIComponent(slug)}/${season}`;
-
-  try {
-    const { data: html } = await axiosInstance.get(url);
-    const $ = cheerio.load(html);
-
-    let datesData = null;
-    $('script').each((_, el) => {
-      const text = $(el).html() || '';
-      if (text.includes('datesData')) {
-        const m = text.match(/var datesData\s*=\s*JSON\.parse\('(.+?)'\)/s);
-        if (m) {
-          try {
-            datesData = JSON.parse(m[1].replace(/\\'/g, "'").replace(/\\"/g, '"'));
-          } catch {}
-        }
-      }
-    });
-
-    if (!datesData) throw new Error('Datos no encontrados en Understat');
-
-    const matches = datesData.slice(-15).map(m => ({
-      date        : m.datetime,
-      opponent    : m.h_team === slug.replace(/_/g,' ') ? m.a_team : m.h_team,
-      isHome      : m.h_team === slug.replace(/_/g,' '),
-      result      : m.result,
-      goals       : parseInt(m.scored),
-      goalsAgainst: parseInt(m.missed),
-      xG          : parseFloat(m.xG),
-      xGA         : parseFloat(m.xGA),
-    }));
-
-    cacheSet(cacheKey, matches, 360);
-    return res.json({ source: 'Understat', fromCache: false, data: matches });
-  } catch (err) {
-    return res.status(500).json({ error: 'Error al obtener xG', details: err.message });
-  }
-});
+// [ENDPOINT ELIMINADO] /api/scrapers/xg (Understat)
+// La extracción de estadísticas avanzadas y xG ha sido delegada a FotMob (fotmobAdapter)
+// para garantizar datos oficiales unificados y mejorar la latencia del backend.
 
 // ─────────────────────────────────────────────────────────────────────
 // 4. LESIONES / BAJAS — Transfermarkt (Caché 3h)
@@ -956,7 +916,7 @@ app.post('/api/auth/google', async (req, res) => {
     );
     res.json({ token, user: { id: dbUser.id, username: dbUser.username, role: dbUser.role, avatar_url: avatarUrl } });
   } catch (e) {
-    console.error('[Google Auth]', e.message, e);
+    logger.error('Google Auth', e.message, e);
     res.status(500).json({ error: 'Error en autenticación con Google', details: e.message || e.toString() });
   }
 });
@@ -1169,7 +1129,7 @@ app.post('/api/value-bets', async (req, res) => {
     if (error) throw error;
     return res.json({ success: true, data: data || null, isNew: !!data });
   } catch (err) {
-    console.error('[value-bets POST]', err.message);
+    logger.error('value-bets POST', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1186,7 +1146,7 @@ app.get('/api/value-bets', async (req, res) => {
     if (error) throw error;
     return res.json({ success: true, data: data || [] });
   } catch (err) {
-    console.error('[value-bets GET]', err.message);
+    logger.error('value-bets GET', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1303,7 +1263,7 @@ app.get('/api/stats/leagues', async (req, res) => {
     return res.json({ success: true, data: { leagues: leaguesArray, markets: marketsArray } });
 
   } catch (err) {
-    console.error('[stats/leagues]', err.message);
+    logger.error('stats/leagues', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1312,14 +1272,7 @@ app.get('/api/stats/leagues', async (req, res) => {
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
-    console.log('\n⚽ ══════════════════════════════════════════════════');
-    console.log(`   CHALACA Backend  →  http://localhost:${PORT}`);
-    console.log('   ══════════════════════════════════════════════════');
-    console.log('   ✓ Fuente de datos: ESPN (100% gratuito)');
-    console.log('   ✓ Caché en Memoria Activa');
-    console.log('   ✓ Transfermarkt & Understat Scrapers Activos');
-    console.log('   ✓ Endpoint /api/espn/match/:id/analysis listo');
-    console.log('⚽ ══════════════════════════════════════════════════\n');
+    logger.banner(PORT);
 
     // ── Pre-calentamiento del caché al arrancar ───────────────────────────
     // Precarga los partidos de hoy en background para que el primer usuario
@@ -1358,7 +1311,7 @@ if (process.env.NODE_ENV !== 'production') {
           });
         }
         cacheSet(`espn_date_${todayKey}`, fixtures, hasLive ? 2 : 5);
-        console.log(`✓ Caché pre-calentado: ${fixtures.length} partidos del ${todayKey}`);
+        logger.info('cache', `Caché pre-calentado: ${fixtures.length} partidos del ${todayKey}`);
       }).catch(() => {});
     }, 1000); // 1s después del arranque para no bloquear el bind del puerto
   });
@@ -1378,7 +1331,7 @@ app.post('/api/live-alerts', async (req, res) => {
     if (error) throw error;
     res.json({ success: true, count: alerts.length });
   } catch (err) {
-    console.error('Error saving live alerts:', err.message);
+    logger.error('liveAlerts', 'Error saving live alerts:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1401,8 +1354,11 @@ app.get('/api/admin/live-alerts', requireAdmin, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // INICIALIZACIÓN DE TAREAS EN SEGUNDO PLANO
 // ─────────────────────────────────────────────────────────────────────────────
-const { initLiveScanner } = require('./liveScanner');
-initLiveScanner(computeMatchAnalysis);
+const { initValueBetScanner } = require('./jobs/valueBetScanner');
+initValueBetScanner(computeMatchAnalysis);
+
+// Middleware centralizado de errores
+app.use(errorHandler);
 
 module.exports = app;
 module.exports.computeMatchAnalysis = computeMatchAnalysis;

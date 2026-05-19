@@ -17,7 +17,11 @@ function ProbBadge({ prob }) {
 
 export default function PicksPage() {
   const navigate = useNavigate();
-  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
+  let user = {};
+  try {
+    const stored = sessionStorage.getItem('chalaca_user');
+    user = stored && stored !== 'undefined' ? JSON.parse(stored) : {};
+  } catch(e){}
   const { picks, setPicks } = useApp();
   const [loaded, setLoaded] = useState([]);
 

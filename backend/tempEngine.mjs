@@ -1,4 +1,4 @@
-import { calcCombinedProbs, calcPythagoreanExpectation, calcVolatilityIndex } from './eloRating.js';
+import { calcCombinedProbs, calcPythagoreanExpectation, calcVolatilityIndex } from '../src/services/eloRating.js';
 // ─────────────────────────────────────────────────────────────────
 //  analysisEngine.js
 //  Motor de análisis tipster profesional — v4 (Elo + Dixon-Coles)
@@ -697,10 +697,9 @@ export function generatePicks({
     return Math.min(unbeatenRatio * 0.8 + winRatio * 0.2, 1);
   };
 
-  // ── SISTEMA DE MOTIVACIÓN Y SUPERVIVENCIA (Global) ──
-  // Personalizado para ligas con formato tradicional de Descenso y Copas Internacionales.
-  const hasRelegationSystem = !leagueName.toLowerCase().includes('mls');
-  if (hasRelegationSystem && matchStandings && matchStandings.total >= 10) {
+  // ── SISTEMA DE MOTIVACIÓN Y SUPERVIVENCIA (Solo LaLiga España) ──
+  // Personalizado para España: Top 4 van a Champions.
+  if (isLaLiga && matchStandings && matchStandings.total >= 10) {
     const tot = matchStandings.total;
     const hr = matchStandings.homeRank;
     const ar = matchStandings.awayRank;
@@ -1257,10 +1256,10 @@ export function generatePicks({
 
       // Doble Oportunidad (Derivada)
       // Cuota 1X = (Local * Empate) / (Local + Empate)
-      if (pick.selection === 'Local o Empate (1X)' && marketOdds.home && marketOdds.draw) {
+      if (pick.selection === 'Local empata o gana (1X)' && marketOdds.home && marketOdds.draw) {
         mOdds = (marketOdds.home * marketOdds.draw) / (marketOdds.home + marketOdds.draw);
       }
-      if (pick.selection === 'Visitante o Empate (X2)' && marketOdds.away && marketOdds.draw) {
+      if (pick.selection === 'Visitante empata o gana (X2)' && marketOdds.away && marketOdds.draw) {
         mOdds = (marketOdds.away * marketOdds.draw) / (marketOdds.away + marketOdds.draw);
       }
 
@@ -1965,7 +1964,6 @@ export function generatePicks({
      // 🚨 MODO DESCENSO: Ambos en el sótano (Duelo de Miedo)
      if (homeInRelegation && awayInRelegation) {
          isRelegationBattle = true;
-         const combinedUnder25 = ((100 - (homeSplitStats?.over25Pct || 50)) + (100 - (awaySplitStats?.over25Pct || 50))) / 2;
          if (!isLive && combinedUnder25 >= 60) {
             addPick({
               market: 'Total de Goles',
@@ -2011,7 +2009,8 @@ export function generatePicks({
   }
 
   // Filtro: picks con tier definido y probabilidad >= umbrales inteligentes
-  let filtered = picks.filter(p => {
+  console.log("=== RAW PICKS ===", JSON.stringify(picks, null, 2));
+let filtered = picks.filter(p => {
     if (!p.tier) return false;
     
     // Filtro Apagón (Blackout Filter)
@@ -2041,8 +2040,8 @@ export function generatePicks({
         if (favorsHome && homeACL.isAtRisk) return false; // 🚫 Local Big4 en rotación
         if (favorsAway && awayACL.isAtRisk) return false;  // 🚫 Visitante Big4 en rotación
       }
-      // Umbral normal de probabilidad (reducido a 82% para capturar Bankers)
-      const threshold = isBig4Match ? 80 : 82;
+      // Umbral normal de probabilidad
+      const threshold = isBig4Match ? 82 : 88;
       if (p.probability < threshold) return false;
     }
 
@@ -2217,32 +2216,16 @@ export function generatePicks({
     return b.probability - a.probability;
   });
 
+  // ── Límite: máximo 8 picks (más espacio para ambos perfiles) ───
   const livePicks   = filtered.filter(p => p.tier === '🔥');
   const seguras     = filtered.filter(p => p.tier !== '🔥' && p.category === 'segura');
   const moderadas   = filtered.filter(p => p.tier !== '🔥' && p.category === 'moderada');
   const valor       = filtered.filter(p => p.tier !== '🔥' && p.category === 'valor');
-
-  // Selección balanceada para Valor: 1 de alta probabilidad + 1 de mejor cuota (baja probabilidad)
-  const selectedValor = [];
-  if (valor.length > 0) {
-    // 1. Alta probabilidad
-    const byProb = [...valor].sort((a, b) => b.probability - a.probability);
-    selectedValor.push(byProb[0]);
-
-    // 2. Mejor cuota (baja probabilidad)
-    const byOdds = [...valor].sort((a, b) => (parseFloat(b.odds) || 0) - (parseFloat(a.odds) || 0));
-    const secondPick = byOdds.find(p => p.selection !== selectedValor[0].selection || p.market !== selectedValor[0].market);
-    if (secondPick) {
-      selectedValor.push(secondPick);
-    } else if (byProb.length > 1) {
-      selectedValor.push(byProb[1]);
-    }
-  }
-
-  const finalPicks  = [
+  console.log("=== FILTERED PICKS ===", JSON.stringify(filtered, null, 2));
+const finalPicks  = [
     ...seguras.slice(0, 3),
     ...moderadas.slice(0, 2),
-    ...selectedValor,
+    ...valor.slice(0, 2),
     ...livePicks.slice(0, 1)
   ];
 

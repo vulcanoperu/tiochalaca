@@ -39,10 +39,10 @@ export default function Footer() {
 
         {/* ── Main Navigation Menu (Synced with Navbar) ── */}
         <nav className="flex flex-wrap justify-center gap-x-12 gap-y-4 mb-14">
-          <Link to="/" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Partidos</Link>
-          <Link to="/estadisticas" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Estadísticas</Link>
-          <Link to="/recomendaciones" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Recomendaciones</Link>
-          <Link to="/picks" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Mis Apuestas</Link>
+          <Link to="/" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Mejores Picks</Link>
+          <Link to="/partidos" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Partidos</Link>
+          <Link to="/resultados" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Resultados</Link>
+          <Link to="/mis-apuestas" className="text-[13px] font-bold text-slate-400 hover:text-white transition-colors">Mis Apuestas</Link>
         </nav>
 
         {/* ── Social Contact ── */}

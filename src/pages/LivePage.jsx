@@ -74,9 +74,12 @@ export default function LivePage() {
       <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
         <div>
           <p className="section-title mb-1">En Vivo</p>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-            <span className="inline-block w-2.5 h-2.5 rounded-full bg-accent-red animate-pulse" />
-            En Vivo Ahora
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight leading-none mb-4 flex items-center gap-4">
+            <Activity className="text-[#BFF102]" size={40} />
+            <div>
+              <span className="text-white">Monitor en</span>{' '}
+              <span style={{ color: '#BFF102' }}>Vivo</span>
+            </div>
           </h1>
           {lastUpdated && (
             <p className="text-xs text-slate-600 mt-1">

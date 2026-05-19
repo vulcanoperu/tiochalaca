@@ -16,7 +16,11 @@ const TABS = [
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('account');
-  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
+  let user = {};
+  try {
+    const stored = sessionStorage.getItem('chalaca_user');
+    user = stored && stored !== 'undefined' ? JSON.parse(stored) : {};
+  } catch(e){}
   const { theme, setTheme, font, setFont, textSize, setTextSize } = useApp();
 
   return (
@@ -24,9 +28,12 @@ export default function SettingsPage() {
       {/* Header */}
       <div>
         <p className="section-title mb-1">Configuración</p>
-        <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-          <Settings size={22} className="text-accent-green" />
-          Ajustes del Sistema
+        <h1 className="text-4xl md:text-5xl font-black tracking-tight leading-none mb-4 flex items-center gap-4">
+          <Settings className="text-[#BFF102]" size={40} />
+          <div>
+            <span className="text-white">Ajustes y</span>{' '}
+            <span style={{ color: '#BFF102' }}>Configuración</span>
+          </div>
         </h1>
       </div>
 

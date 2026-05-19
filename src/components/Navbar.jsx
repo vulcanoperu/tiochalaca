@@ -6,17 +6,23 @@ import {
 } from 'lucide-react';
 
 const MAIN_NAV = [
-  { to: '/',               icon: Home,       label: 'Partidos'       },
-  { to: '/estadisticas',   icon: Activity,   label: 'Estadísticas' },
-  { to: '/recomendaciones', icon: Star,       label: 'Recomendaciones' },
-  { to: '/picks',          icon: BookMarked, label: 'Mis Apuestas'   },
+  { to: '/',               icon: Zap,        label: 'Mejores Picks' },
+  { to: '/partidos',       icon: Home,       label: 'Partidos'       },
+  { to: '/resultados',     icon: Activity,   label: 'Resultados' },
+  { to: '/mis-apuestas',   icon: BookMarked, label: 'Mis Apuestas'   },
 ];
 
 export default function Navbar() {
   const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
+  let user = {};
+  try {
+    const stored = sessionStorage.getItem('chalaca_user');
+    user = stored && stored !== 'undefined' ? JSON.parse(stored) : {};
+  } catch (e) {
+    console.error('Navbar JSON parse error', e);
+  }
 
   const handleLogout = async () => {
     const { logoutUser } = await import('../services/backendApi');
@@ -96,7 +102,7 @@ export default function Navbar() {
                   <p className="text-base font-bold nav-brand-text mt-1 truncate">{user.username}</p>
                 </div>
                 <div className="p-2 space-y-1">
-                  <Link to="/settings" className="nav-dropdown-link flex items-center gap-3 px-4 py-3 rounded-xl text-[14px] transition-colors">
+                  <Link to="/cuenta" className="nav-dropdown-link flex items-center gap-3 px-4 py-3 rounded-xl text-[14px] transition-colors">
                     <Settings size={16} /> Ajustes
                   </Link>
                   <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[14px] text-red-500 hover:bg-red-500/5 transition-colors">

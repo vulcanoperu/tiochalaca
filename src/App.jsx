@@ -3,7 +3,9 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Toaster, toast } from 'react-hot-toast';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
-import Home from './pages/Home';
+import HomePage from './pages/HomePage';
+import MatchesPage from './pages/MatchesPage';
+import HistorialPage from './pages/HistorialPage';
 import Analysis from './pages/Analysis';
 import RecommendationsPage from './pages/RecommendationsPage';
 import PicksPage from './pages/PicksPage';
@@ -27,7 +29,13 @@ export default function App() {
   }, [location.pathname]);
 
   const isAdminRoute = location.pathname.startsWith('/admin');
-  const user = JSON.parse(sessionStorage.getItem('chalaca_user') || '{}');
+  let user = {};
+  try {
+    const storedUser = sessionStorage.getItem('chalaca_user');
+    user = storedUser && storedUser !== 'undefined' ? JSON.parse(storedUser) : {};
+  } catch (e) {
+    console.error('Failed to parse chalaca_user', e);
+  }
 
   const handleRoleChange = useCallback((newRole) => {
     setRoleVersion(v => v + 1);
@@ -62,12 +70,14 @@ export default function App() {
         {!isAdminRoute && <Navbar />}
         <main className={isAdminRoute ? '' : 'max-w-screen-2xl mx-auto px-6 py-8'}>
           <Routes>
-            <Route path="/"               element={<Home />} />
-            <Route path="/analysis/:id"   element={<Analysis />} />
+            <Route path="/"               element={<HomePage />} />
+            <Route path="/partidos"       element={<MatchesPage />} />
+            <Route path="/partido/:id"    element={<Analysis />} />
+            <Route path="/resultados"     element={<StatsPage />} />
+            <Route path="/resultados/historial" element={<HistorialPage />} />
+            <Route path="/mis-apuestas"   element={<PicksPage />} />
+            <Route path="/cuenta"         element={<SettingsPage />} />
             <Route path="/recomendaciones" element={<RecommendationsPage />} />
-            <Route path="/picks"          element={<PicksPage />} />
-            <Route path="/estadisticas"   element={<StatsPage />} />
-            <Route path="/settings"       element={<SettingsPage />} />
             <Route path="/admin"          element={user.role === 'admin' ? <AdminPage /> : <Navigate to="/" replace />} />
             <Route path="*"               element={<Navigate to="/" replace />} />
           </Routes>
