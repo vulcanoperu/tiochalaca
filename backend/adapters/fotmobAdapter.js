@@ -14,7 +14,6 @@
  */
 
 const axios = require('axios');
-const { chromium } = require('playwright-chromium');
 const logger = require('../utils/logger');
 
 const MODULE = 'fotmobAdapter';
@@ -156,6 +155,13 @@ async function getTeamHistory(leagueSlug, teamId) {
 async function getMatchDetailPlaywright(matchId) {
   await rateLimit();
   logger.audit(MODULE, `Lanzando Playwright para match ${matchId}`);
+  let chromium;
+  try {
+    chromium = require('playwright-chromium').chromium;
+  } catch(e) {
+    logger.error(MODULE, 'playwright-chromium no está instalado. Fallback cancelado.');
+    return null;
+  }
   const browser = await chromium.launch({ headless: true });
   try {
     const ctx = await browser.newContext();
