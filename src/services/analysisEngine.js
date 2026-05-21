@@ -2010,8 +2010,100 @@ export function generatePicks({
      }
   }
 
+  // ── FILTRO DE CONSISTENCIA: Eliminar picks contradictorios ────────
+  // Detecta y resuelve picks que se contradicen entre sí (1X+X2, Over+Under, etc.)
+  // Regla general: se mantiene el pick de mayor probabilidad y se elimina el menor.
+  function resolveContradictoryPicks(rawPicks) {
+    const toRemove = new Set();
+    const removalLog = [];
+
+    // Helper: clasificar picks por familia de resultado
+    const findPicks = (predicate) => rawPicks.filter((p, i) => !toRemove.has(i) && predicate(p));
+    const markForRemoval = (pick, reason) => {
+      const idx = rawPicks.indexOf(pick);
+      if (idx !== -1) {
+        toRemove.add(idx);
+        removalLog.push(`[CONTRADICCIÓN] Eliminado: "${pick.selection}" (${pick.probability}%) — ${reason}`);
+      }
+    };
+
+    // Resolver conflicto: mantiene el de mayor probabilidad, elimina el(los) otro(s)
+    const resolveConflict = (picksA, picksB, reasonLabel) => {
+      if (picksA.length === 0 || picksB.length === 0) return;
+      const all = [...picksA, ...picksB].sort((a, b) => b.probability - a.probability);
+      const winner = all[0];
+      all.slice(1).forEach(loser => {
+        markForRemoval(loser, `${reasonLabel}: "${winner.selection}" (${winner.probability}%) tiene mayor prob.`);
+      });
+    };
+
+    // ── Regla 1: 1X + X2 simultáneo (cubren los 3 resultados → sin valor) ──
+    const home1X = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('1X') || p.selection.includes('Local')));
+    const awayX2 = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('X2') || p.selection.includes('Visitante')));
+    resolveConflict(home1X, awayX2, '1X vs X2');
+
+    // ── Regla 2: Victoria Local + Victoria Visitante (imposible) ──
+    const homeWin = findPicks(p => p.market === 'Ganador del Partido' && p.selection.includes('Local'));
+    const awayWin = findPicks(p => p.market === 'Ganador del Partido' && p.selection.includes('Visitante'));
+    resolveConflict(homeWin, awayWin, 'Victoria Local vs Visitante');
+
+    // ── Regla 3: Victoria Local + X2 (contradicción directa) ──
+    const homeWin2 = findPicks(p => p.market === 'Ganador del Partido' && p.selection.includes('Local'));
+    const awayX2_2 = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('X2') || (p.selection.includes('Visitante') && p.selection.includes('Empate'))));
+    resolveConflict(homeWin2, awayX2_2, 'Victoria Local vs X2');
+
+    // ── Regla 4: Victoria Visitante + 1X (contradicción directa) ──
+    const awayWin2 = findPicks(p => p.market === 'Ganador del Partido' && p.selection.includes('Visitante'));
+    const home1X_2 = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('1X') || (p.selection.includes('Local') && p.selection.includes('Empate'))));
+    resolveConflict(awayWin2, home1X_2, 'Victoria Visitante vs 1X');
+
+    // ── Regla 5: Victoria Local/Visitante + Empate ──
+    const anyWin = findPicks(p => p.market === 'Ganador del Partido' && (p.selection.includes('Local') || p.selection.includes('Visitante')));
+    const drawPicks = findPicks(p => p.market === 'Ganador del Partido' && p.selection.includes('Empate'));
+    resolveConflict(anyWin, drawPicks, 'Victoria vs Empate');
+
+    // ── Regla 6: Over 2.5 + Under 2.5 (mutuamente excluyentes) ──
+    const over25 = findPicks(p => p.selection === 'Más de 2.5 goles');
+    const under25 = findPicks(p => p.selection === 'Menos de 2.5 goles');
+    resolveConflict(over25, under25, 'Over 2.5 vs Under 2.5');
+
+    // ── Regla 7: Handicap Local + X2 / Handicap Visitante + 1X ──
+    const haLocal = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local'));
+    const x2Final = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('X2') || (p.selection.includes('Visitante') && p.selection.includes('Empate'))));
+    resolveConflict(haLocal, x2Final, 'Handicap Local vs X2');
+
+    const haAway = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante'));
+    const x1Final = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('1X') || (p.selection.includes('Local') && p.selection.includes('Empate'))));
+    resolveConflict(haAway, x1Final, 'Handicap Visitante vs 1X');
+
+    // ── Regla 8: Doble Oportunidad duplicada del mismo lado ──
+    // (Ej: dos picks "1X" generados por Poisson + Survival Boost)
+    const all1X = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('1X') || (p.selection.includes('Local') && !p.selection.includes('Visitante'))));
+    if (all1X.length > 1) {
+      const best1X = all1X.sort((a, b) => b.probability - a.probability)[0];
+      all1X.slice(1).forEach(dup => markForRemoval(dup, `Duplicado 1X: fusionado con "${best1X.selection}" (${best1X.probability}%)`));
+    }
+
+    const allX2 = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('X2') || (p.selection.includes('Visitante') && !p.selection.includes('Local'))));
+    if (allX2.length > 1) {
+      const bestX2 = allX2.sort((a, b) => b.probability - a.probability)[0];
+      allX2.slice(1).forEach(dup => markForRemoval(dup, `Duplicado X2: fusionado con "${bestX2.selection}" (${bestX2.probability}%)`));
+    }
+
+    // Log de eliminaciones
+    if (removalLog.length > 0) {
+      console.log('\n=== FILTRO DE CONTRADICCIONES ===');
+      removalLog.forEach(log => console.log(log));
+      console.log(`Total eliminados: ${removalLog.length} de ${rawPicks.length} picks\n`);
+    }
+
+    return rawPicks.filter((_, i) => !toRemove.has(i));
+  }
+
+  const consistentPicks = resolveContradictoryPicks(picks);
+
   // Filtro: picks con tier definido y probabilidad >= umbrales inteligentes
-  let filtered = picks.filter(p => {
+  let filtered = consistentPicks.filter(p => {
     if (!p.tier) return false;
     
     // Filtro Apagón (Blackout Filter)

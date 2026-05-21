@@ -704,7 +704,7 @@ export default function Analysis() {
             {/* BLOQUE: SEGURAS */}
             {seguras.length > 0 && (
               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <h3 className="text-sm md:text-base font-black uppercase tracking-widest text-accent-green mb-3 flex items-center gap-2 drop-shadow-md px-1">
+                <h3 className="text-lg md:text-xl font-black uppercase tracking-widest text-accent-green mb-3 flex items-center gap-2 drop-shadow-md px-1">
                   <Shield size={18} /> Apuestas Seguras (Fijas)
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -725,7 +725,7 @@ export default function Analysis() {
                             </span>
                           </div>
                           {(pick.argument || pick.narrative) && (
-                            <p className="text-[10px] text-emerald-100/70 leading-snug line-clamp-3 italic border-l-2 border-accent-green/30 pl-2">
+                            <p className="text-sm text-emerald-100/70 leading-snug line-clamp-3 italic border-l-2 border-accent-green/30 pl-2">
                               "{pick.argument || pick.narrative}"
                             </p>
                           )}
@@ -753,7 +753,7 @@ export default function Analysis() {
             {/* BLOQUE: ARRIESGADAS / ALTO VALOR */}
             {arriesgadas.length > 0 && (
               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <h3 className="text-sm md:text-base font-black uppercase tracking-widest text-yellow-400 mb-3 flex items-center gap-2 drop-shadow-md px-1">
+                <h3 className="text-lg md:text-xl font-black uppercase tracking-widest text-yellow-400 mb-3 flex items-center gap-2 drop-shadow-md px-1">
                   <Zap size={18} /> Apuestas Arriesgadas (Alto Valor)
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -764,7 +764,7 @@ export default function Analysis() {
                       <div className="flex p-4 flex-1">
                         <div className="flex flex-col items-center justify-center pr-4 border-r border-yellow-400/20 min-w-[75px]">
                           <span className="text-3xl font-numbers font-black text-yellow-400 leading-none">{pick.probability}%</span>
-                          <span className="text-[9px] font-bold text-yellow-400/70 uppercase tracking-widest mt-1">Valor</span>
+                          <span className="text-xs font-bold text-yellow-400/70 uppercase tracking-widest mt-1">Valor</span>
                         </div>
                         <div className="pl-4 flex-1 flex flex-col justify-center min-w-0 z-10">
                           <div className="flex flex-col items-start mb-2">
@@ -774,7 +774,7 @@ export default function Analysis() {
                             </span>
                           </div>
                           {(pick.argument || pick.narrative) && (
-                            <p className="text-[10px] text-yellow-100/70 leading-snug line-clamp-3 italic border-l-2 border-yellow-400/30 pl-2">
+                            <p className="text-sm text-yellow-100/70 leading-snug line-clamp-3 italic border-l-2 border-yellow-400/30 pl-2">
                               "{pick.argument || pick.narrative}"
                             </p>
                           )}

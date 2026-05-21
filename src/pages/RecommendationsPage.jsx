@@ -391,7 +391,7 @@ export default function RecommendationsPage() {
         </button>
         <button 
           onClick={() => setActiveTab('alto-valor')}
-          className={`pb-4 text-[13px] font-black uppercase tracking-widest border-b-2 transition-all duration-300 flex items-center gap-2 ${
+          className={`pb-4 text-base font-black uppercase tracking-widest border-b-2 transition-all duration-300 flex items-center gap-2 ${
             activeTab === 'alto-valor' 
               ? 'border-yellow-400 text-yellow-400' 
               : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-white/10'
@@ -531,7 +531,7 @@ export default function RecommendationsPage() {
                 <div className="w-8 h-8 rounded-full bg-yellow-400/10 flex items-center justify-center border border-yellow-400/20">
                   <Crown size={16} className="text-yellow-400" />
                 </div>
-                <h2 className="text-base font-black text-white uppercase tracking-widest drop-shadow-md">Apuestas de Alto Valor</h2>
+                <h2 className="text-xl font-black text-white uppercase tracking-widest drop-shadow-md">Apuestas de Alto Valor</h2>
               </div>
               
               {/* Filtros Estilizados */}
@@ -578,7 +578,7 @@ export default function RecommendationsPage() {
                         </div>
                         <span className="text-sm font-bold text-white leading-tight">{pick.match?.teams?.home?.name} <span className="text-slate-500 font-normal mx-1">vs</span> {pick.match?.teams?.away?.name}</span>
                      </div>
-                     <div className="flex-shrink-0 bg-gradient-to-br from-yellow-400 to-amber-600 text-surface-900 text-[9px] font-black px-2.5 py-1 rounded-md shadow-md uppercase tracking-wider">
+                     <div className="flex-shrink-0 bg-gradient-to-br from-yellow-400 to-amber-600 text-surface-900 text-xs font-black px-3 py-1.5 rounded-md shadow-md uppercase tracking-wider">
                         ALTO VALOR
                      </div>
                   </div>
