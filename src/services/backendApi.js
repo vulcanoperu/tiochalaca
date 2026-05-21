@@ -20,6 +20,13 @@ const backend = axios.create({
   timeout: BACKEND_TIMEOUT,
 });
 
+const parseError = (err) => {
+  const backendError = err.response?.data?.error;
+  if (typeof backendError === 'string') return backendError;
+  if (backendError && typeof backendError === 'object') return backendError.message || JSON.stringify(backendError);
+  return err.message || 'Error desconocido';
+};
+
 // ─────────────────────────────────────────────────────────────────────
 // Helper genérico — captura errores de red (backend offline)
 // ─────────────────────────────────────────────────────────────────────
@@ -137,7 +144,7 @@ export async function loginUser(username, password) {
       return { success: true, user: res.data.user };
     }
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -152,7 +159,7 @@ export async function loginWithGoogle(access_token) {
     return { success: false, error: 'No se recibió token' };
   } catch (err) {
     const detail = err.response?.data?.details;
-    const msg = err.response?.data?.error || err.message;
+    const msg = parseError(err);
     return { success: false, error: detail ? `${msg}: ${detail}` : msg };
   }
 }
@@ -183,7 +190,7 @@ export async function registerUser(username, password) {
     const res = await backend.post('/api/auth/register', { username, password });
     return { success: res.data.success, message: res.data.message };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -197,7 +204,7 @@ export async function fetchAdminUsers() {
     const res = await backend.get('/api/admin/users', { headers: getAuthHeaders() });
     return { success: true, users: res.data };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -206,7 +213,7 @@ export async function deleteUser(userId) {
     const res = await backend.delete(`/api/admin/users/${userId}`, { headers: getAuthHeaders() });
     return { success: res.data.success };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -215,7 +222,7 @@ export async function forceResetPassword(userId, newPassword) {
     const res = await backend.put(`/api/admin/users/${userId}/password`, { password: newPassword }, { headers: getAuthHeaders() });
     return { success: res.data.success, message: res.data.message };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -227,7 +234,7 @@ export async function getDbPicks() {
     const res = await backend.get('/api/picks', { headers: getAuthHeaders() });
     return { success: true, picks: res.data };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -236,7 +243,7 @@ export async function saveDbPick(pickData) {
     const res = await backend.post('/api/picks', pickData, { headers: getAuthHeaders() });
     return { success: res.data.success, id: res.data.id };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -245,7 +252,7 @@ export async function updateDbPick(pickId, updatedData) {
     const res = await backend.put(`/api/picks/${pickId}`, updatedData, { headers: getAuthHeaders() });
     return { success: res.data.success };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -254,7 +261,7 @@ export async function deleteDbPick(pickId) {
     const res = await backend.delete(`/api/picks/${pickId}`, { headers: getAuthHeaders() });
     return { success: res.data.success };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
@@ -263,7 +270,7 @@ export async function clearAllDbPicks() {
     const res = await backend.delete('/api/picks', { headers: getAuthHeaders() });
     return { success: res.data.success };
   } catch (err) {
-    return { success: false, error: err.response?.data?.error || err.message };
+    return { success: false, error: parseError(err) };
   }
 }
 
