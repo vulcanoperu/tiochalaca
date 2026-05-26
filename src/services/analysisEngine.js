@@ -237,6 +237,17 @@ export function isDerbyMatch(home, away) {
     ['cruz azul', 'américa'],
     ['nacional', 'peñarol'],
     ['colo colo', 'universidad de chile'],
+    // Clásicos Chilenos adicionales
+    ['universidad de chile', 'universidad católica'],
+    ['colo colo', 'universidad católica'],
+    ['deportes concepcion', 'huachipato'],
+    ['deportes concepción', 'huachipato'],
+    ['everton', 'santiago wanderers'],
+    ['la serena', 'coquimbo unido'],
+    ['palestino', 'unión española'],
+    ['palestino', 'audax italiano'],
+    ['unión española', 'audax italiano'],
+    ['cobreloa', 'cobresal'],
     ['millonarios', 'santa fe'],
     ['nacional', 'medellín'],
     ['al nassr', 'al hilal'],
@@ -1157,8 +1168,19 @@ export function generatePicks({
       return `Los dos equipos anotan seguido — tanto el local como el visitante tienen jugadores que generan peligro y terminan dentro del marcador. ${goalsNote} No se trata solo de que haya goles en el partido, sino de que los dos equipos aparezcan en el tablero. Según sus promedios, eso es lo más habitual.`;
     }
 
-    // Handicap Asiático
+    // Handicap Asiático (Negativo: -0.5)
     if (market === 'Handicap Asiático') {
+      // ── Handicap Positivo (+1.5 / +2.0): Protección al underdog ──
+      if (sel.includes('+')) {
+        const line = sel.includes('+2') ? '+2.0' : '+1.5';
+        const protTeam = sel.toLowerCase().includes('visitante') ? away : home;
+        const favTeam  = sel.toLowerCase().includes('visitante') ? home : away;
+        if (line === '+2.0') {
+          return `${protTeam} llega como el equipo más débil según las cuotas, pero no es un equipo que se deje golear fácilmente. Con el hándicap ${line}, solo pierdes la apuesta si ${favTeam} gana por 3 o más goles — algo poco frecuente. Si ${favTeam} gana por exactamente 2, te devuelven el dinero. Y si gana por 1, empatan o ${protTeam} gana, cobras. ${goalsNote} Es la forma más inteligente de respaldar al underdog sin arriesgar demasiado.`;
+        }
+        return `Con el hándicap ${line} le das una ventaja virtual de 1.5 goles a ${protTeam}. Eso significa que solo pierdes si ${favTeam} gana por 2 o más goles. Un resultado ajustado como 1-0 o 2-1 ya te da ganador. ${goalsNote} Es una apuesta defensiva que aprovecha la solidez del rival menos favorito.`;
+      }
+      // ── Handicap Negativo (-0.5): Favorito claro ──
       if (homeStar && sel.includes('local')) {
         return `${home} tiene demasiada jerarquía para conformarse con un empate acá. El handicap asiático -0.5 es más inteligente que apostar a la victoria directa: te da exactamente la misma lógica pero con una cuota más atractiva. ${goalsNote} Si ${home} gana, tú cobras — y según el análisis, ganar es lo que el modelo espera.`;
       }
@@ -1262,6 +1284,18 @@ export function generatePicks({
       }
       if (pick.selection === 'Visitante o Empate (X2)' && marketOdds.away && marketOdds.draw) {
         mOdds = (marketOdds.away * marketOdds.draw) / (marketOdds.away + marketOdds.draw);
+      }
+
+      // Handicap Asiático Positivo (Derivada del spread de ESPN)
+      // ESPN provee spread -1.5 del favorito. El +1.5 del underdog es el inverso.
+      // Para +2.0 aplicamos un factor de ajuste conservador.
+      if (pick.selection.includes('+1.5') && marketOdds.spreadOddsAway) {
+        mOdds = marketOdds.spreadOddsAway; // Cuota directa del +1.5 de ESPN
+      }
+      if (pick.selection.includes('+2.0') && marketOdds.spreadOddsAway) {
+        // +2.0 es una línea más segura que +1.5, así que la cuota es menor
+        mOdds = 1 + ((marketOdds.spreadOddsAway - 1) * 0.65);
+        if (mOdds < 1.20) mOdds = 1.25;
       }
 
       if (mOdds && mOdds > 1.01) {
@@ -1676,6 +1710,125 @@ export function generatePicks({
     }
   }
 
+  // ── Handicap Asiático Positivo: Underdog +1.5 / +2.0 ──────────
+  // Mercado defensivo: respalda al equipo menos favorito con protección.
+  // Se activa cuando hay una brecha grande de cuotas (favorito masivo) PERO
+  // el underdog demuestra solidez defensiva o resiliencia en el H2H.
+  //
+  // Lógica de activación:
+  //   1. El favorito tiene moneyline <= -400 (probabilidad implícita >= 80%)
+  //   2. El underdog concede pocos goles (avgGA <= 1.3) O el H2H fue cerrado
+  //   3. El underdog no fue goleado en sus últimos partidos
+  //
+  // Línea seleccionada:
+  //   +2.0 → Cuando la brecha es extrema (moneyline <= -450) y defensa sólida
+  //   +1.5 → Cuando la brecha es grande pero no extrema
+  if (!isLive && marketOdds) {
+    const homeML = marketOdds.home || 0;
+    const awayML = marketOdds.away || 0;
+
+    // Determinar quién es el favorito masivo y quién es el underdog
+    const homeFavMassive = homeML > 0 && homeML <= 1.25; // Cuota decimal <= 1.25 = favorito brutal
+    const awayFavMassive = awayML > 0 && awayML <= 1.25;
+
+    // Alternativa: detectar favorito por moneyline americano si las cuotas vienen en ese formato
+    const homeMLAmerican = marketOdds.homeMoneyLine || 0;
+    const awayMLAmerican = marketOdds.awayMoneyLine || 0;
+    const homeFavByML = homeMLAmerican <= -400 || homeFavMassive;
+    const awayFavByML = awayMLAmerican <= -400 || awayFavMassive;
+
+    // También detectamos favorito masivo por la diferencia de effectiveScore
+    const homeFavByScore = effectiveAdv >= 25;
+    const awayFavByScore = -effectiveAdv >= 25;
+
+    const isMassiveFavorite = homeFavByML || awayFavByML || homeFavByScore || awayFavByScore;
+    const favoriteIsHome = homeFavByML || homeFavByScore;
+
+    if (isMassiveFavorite) {
+      // El underdog es el equipo contrario al favorito
+      const underdogName   = favoriteIsHome ? awayTeamName : homeTeamName;
+      const favoriteName   = favoriteIsHome ? homeTeamName : awayTeamName;
+      const underdogAvgGA  = favoriteIsHome ? awayAvgGA : homeAvgGA;
+      const underdogForm   = favoriteIsHome ? awayForm : homeForm;
+      const underdogSide   = favoriteIsHome ? 'Visitante' : 'Local';
+      const favoriteScore  = favoriteIsHome ? homeEffectiveScore : awayEffectiveScore;
+      const underdogScore  = favoriteIsHome ? awayEffectiveScore : homeEffectiveScore;
+
+      // Condiciones de solidez defensiva del underdog
+      const defenseSolid  = underdogAvgGA <= 1.3;
+      const h2hWasTight   = h2hData && h2hData.avgGoals <= 2.5;
+      const underdogNotCollapsing = underdogForm.score >= 35; // No está en caída libre
+
+      // Score diferencial para elegir la línea
+      const scoreDiff = Math.abs(effectiveAdv);
+
+      if ((defenseSolid || h2hWasTight) && underdogNotCollapsing) {
+        // ── +2.0: Brecha extrema + defensa sólida del underdog ──
+        // Solo si la diferencia de scores es >= 30 o el favorito tiene moneyline <= -450
+        const isExtremeFav = (homeMLAmerican <= -450 || awayMLAmerican <= -450) ||
+                             (homeML > 0 && homeML <= 1.20) || (awayML > 0 && awayML <= 1.20) ||
+                             scoreDiff >= 30;
+
+        if (isExtremeFav && defenseSolid) {
+          // Probabilidad: P(underdog pierde por <= 1 gol) + P(empate) + P(underdog gana)
+          // Aproximación via Poisson: P(diff <= 1) para el underdog
+          let probHA20 = 0;
+          const lH = favoriteIsHome ? lambdaHome : lambdaAway;
+          const lA = favoriteIsHome ? lambdaAway : lambdaHome;
+          for (let f = 0; f <= 6; f++) {
+            for (let u = 0; u <= 6; u++) {
+              const p = poissonProb(lH, f) * poissonProb(lA, u);
+              // Underdog "gana" con +2.0 si: pierde por 0-1, empata, o gana
+              if (f - u <= 1) probHA20 += p;
+            }
+          }
+          const prob20 = Math.min(Math.round(probHA20 * 100), 92);
+
+          if (prob20 >= 60) {
+            const h2hNote = h2hWasTight ? ` H2H cerrado (${h2hData.avgGoals} goles/p).` : '';
+            addPick({
+              market: 'Handicap Asiático',
+              selection: `${underdogSide} +2.0 (Pierde por ≤1, empate o victoria)`,
+              probability: prob20,
+              tier: prob20 >= 82 ? '🟢' : prob20 >= 72 ? '🔵' : '🟡',
+              argument: `${underdogName} concede solo ${underdogAvgGA} goles/p → defensa ordenada contra favorito masivo.${h2hNote} Con +2.0: si pierde por 1 gol cobras, por 2 te devuelven, solo fallas si golean por 3+. Forma efectiva: ${favoriteName} ${favoriteScore}% vs ${underdogName} ${underdogScore}%.`,
+              risk: prob20 >= 78 ? 'Bajo' : 'Moderado',
+              units: '3-4u',
+            });
+          }
+        }
+
+        // ── +1.5: Brecha grande pero no extrema, o defensa menos sólida ──
+        // Se activa si no se generó el +2.0, o si la brecha es moderada
+        if (!isExtremeFav || !defenseSolid) {
+          let probHA15 = 0;
+          const lH2 = favoriteIsHome ? lambdaHome : lambdaAway;
+          const lA2 = favoriteIsHome ? lambdaAway : lambdaHome;
+          for (let f = 0; f <= 6; f++) {
+            for (let u = 0; u <= 6; u++) {
+              const p = poissonProb(lH2, f) * poissonProb(lA2, u);
+              // Underdog "gana" con +1.5 si: pierde por 0-1 gol, empata, o gana
+              if (f - u <= 1) probHA15 += p;
+            }
+          }
+          const prob15 = Math.min(Math.round(probHA15 * 100), 90);
+
+          if (prob15 >= 62) {
+            addPick({
+              market: 'Handicap Asiático',
+              selection: `${underdogSide} +1.5 (Pierde por ≤1 o no pierde)`,
+              probability: prob15,
+              tier: prob15 >= 80 ? '🟢' : prob15 >= 70 ? '🔵' : '🟡',
+              argument: `${underdogName} no se deja golear fácil (${underdogAvgGA} GA/p). Con +1.5: solo fallas si el favorito gana por 2+ goles. Forma efectiva: ${favoriteName} ${favoriteScore}% vs ${underdogName} ${underdogScore}%.`,
+              risk: prob15 >= 75 ? 'Bajo' : 'Moderado',
+              units: '2-3u',
+            });
+          }
+        }
+      }
+    }
+  }
+
   // ── Doble Oportunidad: Local o Empate (1X) ────────────────────
   // Usamos Poisson: prob 1X = P(local gana) + P(empate)
   if (!isLive && poissonProbs) {
@@ -2067,14 +2220,25 @@ export function generatePicks({
     const under25 = findPicks(p => p.selection === 'Menos de 2.5 goles');
     resolveConflict(over25, under25, 'Over 2.5 vs Under 2.5');
 
-    // ── Regla 7: Handicap Local + X2 / Handicap Visitante + 1X ──
-    const haLocal = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local'));
+    // ── Regla 7: Handicap Negativo Local + X2 / Handicap Negativo Visitante + 1X ──
+    const haLocalNeg = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local') && p.selection.includes('-'));
     const x2Final = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('X2') || (p.selection.includes('Visitante') && p.selection.includes('Empate'))));
-    resolveConflict(haLocal, x2Final, 'Handicap Local vs X2');
+    resolveConflict(haLocalNeg, x2Final, 'Handicap -0.5 Local vs X2');
 
-    const haAway = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante'));
+    const haAwayNeg = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante') && p.selection.includes('-'));
     const x1Final = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('1X') || (p.selection.includes('Local') && p.selection.includes('Empate'))));
-    resolveConflict(haAway, x1Final, 'Handicap Visitante vs 1X');
+    resolveConflict(haAwayNeg, x1Final, 'Handicap -0.5 Visitante vs 1X');
+
+    // ── Regla 9: Handicap Positivo (+1.5/+2.0) + Victoria del mismo lado ──
+    // HA +1.5 Visitante no contradice Victoria Local (es coherente: ambos dicen que el local gana)
+    // PERO HA +1.5 Visitante SÍ contradice HA -0.5 Visitante (uno dice que gana, el otro que pierde ajustado)
+    const haLocalPos = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local') && p.selection.includes('+'));
+    const haLocalNeg2 = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local') && p.selection.includes('-'));
+    resolveConflict(haLocalPos, haLocalNeg2, 'HA + Local vs HA - Local');
+
+    const haAwayPos = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante') && p.selection.includes('+'));
+    const haAwayNeg2 = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante') && p.selection.includes('-'));
+    resolveConflict(haAwayPos, haAwayNeg2, 'HA + Visitante vs HA - Visitante');
 
     // ── Regla 8: Doble Oportunidad duplicada del mismo lado ──
     // (Ej: dos picks "1X" generados por Poisson + Survival Boost)
@@ -2123,8 +2287,11 @@ export function generatePicks({
     const awayIsBig4 = SAUDI_BIG4.some(t => awayTeamName?.includes(t));
     const isBig4Match = isSaudi && (homeIsBig4 || awayIsBig4);
 
-    // Poda de Ganador Directo (1X2)
-    if (p.market === 'Ganador del Partido' || p.market === 'Handicap Asiático') {
+    // Poda de Ganador Directo (1X2) y Handicap Negativo (-0.5)
+    // NOTA: Los Handicap Positivos (+1.5/+2.0) son mercados defensivos (como Doble Oportunidad)
+    // y NO deben pasar por este filtro de 82%. Se evalúan más abajo con umbrales estándar.
+    const isPositiveHandicap = p.market === 'Handicap Asiático' && p.selection.includes('+');
+    if ((p.market === 'Ganador del Partido' || p.market === 'Handicap Asiático') && !isPositiveHandicap) {
       // FILTRO ACL: Si el equipo favorito (el que generó el pick) está en riesgo
       // de rotación por congestión ACL, bloqueamos Ganador/Hándicap sin importar la prob.
       const favorsHome = p.selection.includes('Local') || p.selection.includes('Local');
@@ -2300,41 +2467,40 @@ export function generatePicks({
     return p;
   });
 
-  // Ordenar: primero las seguras (por probabilidad), luego las de valor (por cuota)
-  filtered.sort((a, b) => {
-    // Prioridad: segura > moderada > valor
-    const catOrder = { segura: 0, moderada: 1, valor: 2 };
-    const catDiff = (catOrder[a.category] || 1) - (catOrder[b.category] || 1);
-    if (catDiff !== 0) return catDiff;
-    return b.probability - a.probability;
+  // ── Filtro de Cuota Mínima (Boring Odds Filter) ─────────────────
+  // Descartamos picks con cuotas decimales < 1.20 porque no generan valor
+  // real para el usuario (riesgo/recompensa desfavorable).
+  const MIN_ODDS = 1.20;
+  filtered = filtered.filter(p => {
+    const o = parseFloat(p.odds);
+    // Si la cuota no está disponible o es un string como '1.80+', dejamos pasar
+    if (!o || isNaN(o)) return true;
+    return o >= MIN_ODDS;
   });
 
   const livePicks   = filtered.filter(p => p.tier === '🔥');
-  const seguras     = filtered.filter(p => p.tier !== '🔥' && p.category === 'segura');
-  const moderadas   = filtered.filter(p => p.tier !== '🔥' && p.category === 'moderada');
-  const valor       = filtered.filter(p => p.tier !== '🔥' && p.category === 'valor');
+  // 💎 tier SIEMPRE va a valuePicks, sin importar la categoría del pick
+  const valuePicks  = filtered.filter(p => p.tier !== '🔥' && (p.tier === '💎' || p.category === 'valor'));
+  const moderadas   = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'moderada');
+  const seguras     = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'segura');
 
-  // Selección balanceada para Valor: 1 de alta probabilidad + 1 de mejor cuota (baja probabilidad)
-  const selectedValor = [];
-  if (valor.length > 0) {
-    // 1. Alta probabilidad
-    const byProb = [...valor].sort((a, b) => b.probability - a.probability);
-    selectedValor.push(byProb[0]);
+  // Ordenar cada grupo internamente
+  // Value Bets: primero las de MAYOR cuota (más emocionante/rentable)
+  const sortedValor = [...valuePicks].sort((a, b) => (parseFloat(b.odds) || 0) - (parseFloat(a.odds) || 0));
+  // Seguras: primero las de mayor probabilidad
+  const sortedSeguras = [...seguras].sort((a, b) => b.probability - a.probability);
+  // Moderadas: primero las de mayor probabilidad
+  const sortedModeradas = [...moderadas].sort((a, b) => b.probability - a.probability);
 
-    // 2. Mejor cuota (baja probabilidad)
-    const byOdds = [...valor].sort((a, b) => (parseFloat(b.odds) || 0) - (parseFloat(a.odds) || 0));
-    const secondPick = byOdds.find(p => p.selection !== selectedValor[0].selection || p.market !== selectedValor[0].market);
-    if (secondPick) {
-      selectedValor.push(secondPick);
-    } else if (byProb.length > 1) {
-      selectedValor.push(byProb[1]);
-    }
-  }
-
-  const finalPicks  = [
-    ...seguras.slice(0, 3),
-    ...moderadas.slice(0, 2),
-    ...selectedValor,
+  // ── Orden de Presentación ─────────────────────────────────────────
+  // 1. 💎 Value Bets (mayor ROI potencial, las más emocionantes)
+  // 2. 🔵 Moderadas  (confiables, cuotas decentes)
+  // 3. 🟢 Seguras    (bankers, bajo riesgo pero cuotas aburridas)
+  // 4. 🔥 En Vivo    (siempre al final como bonus)
+  const finalPicks = [
+    ...sortedValor.slice(0, 3),
+    ...sortedModeradas.slice(0, 2),
+    ...sortedSeguras.slice(0, 2),
     ...livePicks.slice(0, 1)
   ];
 

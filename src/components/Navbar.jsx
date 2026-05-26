@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 const MAIN_NAV = [
-  { to: '/',               icon: Zap,        label: 'Mejores Picks' },
+  { to: '/',               icon: Zap,        label: 'Mejores Apuestas' },
   { to: '/partidos',       icon: Home,       label: 'Partidos'       },
   { to: '/resultados',     icon: Activity,   label: 'Resultados' },
   { to: '/mis-apuestas',   icon: BookMarked, label: 'Mis Apuestas'   },

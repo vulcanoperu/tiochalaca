@@ -1268,6 +1268,357 @@ app.get('/api/stats/leagues', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// AUDITORÍA SERVER-SIDE — Misma lógica que AuditDashboard.jsx
+// GET /api/stats/audit?date=YYYY-MM-DD → Corre el motor + evalúa resultados
+// Cachea resultados en Supabase para no recalcular cada vez
+// ─────────────────────────────────────────────────────────────────────
+let _auditEngine = null;
+async function loadAuditEngine() {
+  if (_auditEngine) return _auditEngine;
+  try {
+    const path = require('path');
+    const enginePath = path.resolve(__dirname, '../src/services/analysisEngine.js').replace(/\\/g, '/');
+    _auditEngine = await import('file:///' + enginePath);
+    logger.info('audit', 'analysisEngine cargado para auditoría.');
+    return _auditEngine;
+  } catch (e) {
+    logger.error('audit', 'Error cargando analysisEngine:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Evalúa si un pick individual fue acertado contra el resultado real.
+ * Réplica EXACTA de la lógica de AuditDashboard.jsx (líneas 161-265).
+ */
+function evaluatePick(pick, homeScore, awayScore, totalGoals, totalCorners, totalCards, totalYellow, totalRed) {
+  const p = pick;
+
+  if (p.market === 'Ganador del Partido') {
+    if ((p.selection === 'Victoria Local' || p.selection.includes('Local -0.5')) && homeScore > awayScore) return true;
+    if ((p.selection === 'Victoria Visitante' || p.selection.includes('Visitante -0.5')) && awayScore > homeScore) return true;
+    if (p.selection === 'Empate' && homeScore === awayScore) return true;
+    return false;
+  }
+  if (p.market === 'Handicap Asiático') {
+    if (p.selection.includes('Local') && homeScore > awayScore) return true;
+    if (p.selection.includes('Visitante') && awayScore > homeScore) return true;
+    return false;
+  }
+  if (p.market === 'Total de Goles') {
+    const threshold = parseFloat(p.selection.split(' ')[2]);
+    if (p.selection.includes('Más') && totalGoals > threshold) return true;
+    if (p.selection.includes('Menos') && totalGoals < threshold) return true;
+    return false;
+  }
+  if (p.market === 'Ambos Marcan') {
+    const btts = homeScore > 0 && awayScore > 0;
+    if (p.selection.includes('Sí') && btts) return true;
+    if (p.selection.includes('No') && !btts) return true;
+    return false;
+  }
+  if (p.market === 'Doble Oportunidad') {
+    if (p.selection.includes('1X') && homeScore >= awayScore) return true;
+    if (p.selection.includes('X2') && awayScore >= homeScore) return true;
+    if (p.selection.includes('12') && homeScore !== awayScore) return true;
+    return false;
+  }
+  if (p.market === 'Combo') {
+    const btts = homeScore > 0 && awayScore > 0;
+    if (p.selection === 'Ambos Marcan + Más de 2.5') return btts && totalGoals > 2.5;
+    return false;
+  }
+  if (p.market === 'Córners Totales') {
+    if (totalCorners === 0) return false;
+    const m = p.selection.match(/(Más|Menos) de (\d+\.?\d*)/);
+    if (m) {
+      const isOver = m[1] === 'Más', th = parseFloat(m[2]);
+      if (isOver && totalCorners > th) return true;
+      if (!isOver && totalCorners < th) return true;
+    }
+    return false;
+  }
+  if (p.market === 'Tarjetas Totales') {
+    if (totalCards === 0 && totalYellow === 0) return false;
+    const m = p.selection.match(/(Más|Menos) de (\d+\.?\d*)/);
+    if (m) {
+      const isOver = m[1] === 'Más', th = parseFloat(m[2]);
+      const subject = p.selection.toLowerCase().includes('amarilla') ? totalYellow :
+                      p.selection.toLowerCase().includes('roja') ? totalRed : totalCards;
+      if (isOver && subject > th) return true;
+      if (!isOver && subject < th) return true;
+    }
+    return false;
+  }
+  if (p.market === 'Gol por Tramo') {
+    return totalGoals > 0;
+  }
+  if (p.market === 'Goles en Vivo (1T)') {
+    const m = p.selection.match(/(Más|Menos) de (\d+\.?\d*) goles/);
+    if (m) {
+      const isOver = m[1] === 'Más', th = parseFloat(m[2]);
+      if (isOver && th <= 0.5 && totalGoals > 0) return true;
+      if (!isOver && th >= 2.5 && totalGoals <= 1) return true;
+    }
+    return false;
+  }
+  if (p.market === 'Estrategia en Vivo' || p.market === 'Goles en Vivo') {
+    if (p.selection.includes('Más') || p.selection.includes('Menos')) {
+      const match = p.selection.match(/(Más|Menos) de (\d+\.?\d*) goles/);
+      if (match) {
+        const isOver = match[1] === 'Más', threshold = parseFloat(match[2]);
+        if (isOver && totalGoals > threshold) return true;
+        if (!isOver && totalGoals < threshold) return true;
+        return false;
+      }
+      return totalGoals > 0;
+    }
+    if (p.selection.includes('2do Tiempo') || p.selection.includes('Segundo Tiempo')) return totalGoals > 0;
+    if (p.selection.includes('1er Tiempo') || p.selection.includes('Primer Tiempo')) return totalGoals > 0;
+    if (p.selection.includes('Local') && homeScore > awayScore) return true;
+    if (p.selection.includes('Visitante') && awayScore > homeScore) return true;
+    if ((p.selection.includes('1X') || p.selection.includes('Remontada Local')) && homeScore >= awayScore) return true;
+    if ((p.selection.includes('X2') || p.selection.includes('Remontada Visitante')) && awayScore >= homeScore) return true;
+    return false;
+  }
+  if (p.market === 'Resultado en Vivo') {
+    if ((p.selection.includes('Local') || p.selection.includes('1X')) && homeScore >= awayScore) return true;
+    if ((p.selection.includes('Visitante') || p.selection.includes('X2')) && awayScore >= homeScore) return true;
+    if (p.selection.includes('Empate') && homeScore === awayScore) return true;
+    return false;
+  }
+  return false;
+}
+
+app.get('/api/stats/audit', async (req, res) => {
+  const date = req.query.date;
+  if (!date) return res.status(400).json({ error: 'Falta parámetro date (YYYY-MM-DD)' });
+
+  // Verificar si ya tenemos el resultado cacheado en Supabase
+  const auditCacheKey = `audit_${date}`;
+  try {
+    const { data: cached } = await supabase.from('analysis_cache').select('data').eq('event_id', auditCacheKey).single();
+    if (cached && cached.data) {
+      return res.json({ success: true, fromCache: true, data: cached.data });
+    }
+  } catch (_) {}
+
+  // Cargar el motor de análisis
+  const engine = await loadAuditEngine();
+  if (!engine) return res.status(500).json({ error: 'No se pudo cargar el motor de análisis' });
+
+  try {
+    // 1. Obtener partidos del día
+    const dateParam = date.replace(/-/g, '');
+    const requests = Object.keys(ALLOWED_LEAGUES).map(l =>
+      axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 5000 })
+        .then(r => ({ slug: l, data: r.data }))
+        .catch(() => null)
+    );
+    const results = await Promise.allSettled(requests);
+
+    let allFixtures = [];
+    for (const r of results) {
+      if (r.status !== 'fulfilled' || !r.value?.data?.events) continue;
+      const { slug, data } = r.value;
+      const leagueInfo = data.leagues?.[0];
+      data.events.forEach(e => {
+        const comp = e.competitions?.[0];
+        const home = comp?.competitors?.find(c => c.homeAway === 'home');
+        const away = comp?.competitors?.find(c => c.homeAway === 'away');
+        const statusObj = comp?.status || e.status;
+        const state = statusObj?.type?.state;
+        if (state !== 'post') return; // Solo partidos finalizados
+        const getScore = c => {
+          if (!c) return null;
+          if (c.score?.value !== undefined) return parseInt(c.score.value);
+          if (c.score !== undefined) return parseInt(c.score);
+          return null;
+        };
+        allFixtures.push({
+          fixture: { id: e.id, date: e.date, status: { short: 'FT' } },
+          league: { id: slug, name: ALLOWED_LEAGUES[slug], logo: leagueInfo?.logos?.[0]?.href || '' },
+          teams: {
+            home: { id: home?.id, name: home?.team?.displayName || home?.team?.name, logo: home?.team?.logo },
+            away: { id: away?.id, name: away?.team?.displayName || away?.team?.name, logo: away?.team?.logo },
+          },
+          goals: { home: getScore(home), away: getScore(away) },
+        });
+      });
+    }
+
+    // 2. Procesar cada partido
+    let totalPicks = 0, hits = 0, misses = 0, skippedMatches = 0;
+    let matchReports = [];
+
+    const processMatch = async (f) => {
+      try {
+        const eventId = f.fixture.id;
+        const [analysisResult, summary] = await Promise.all([
+          computeMatchAnalysis(eventId),
+          getMatchSummary(eventId),
+        ]);
+        const analysisData = analysisResult.data;
+        if (!analysisData) return;
+
+        const homeScore = parseInt(f.goals.home);
+        const awayScore = parseInt(f.goals.away);
+        if (isNaN(homeScore) || isNaN(awayScore)) return;
+        const totalGoals = homeScore + awayScore;
+
+        const homeId = f.teams.home.id;
+        const awayId = f.teams.away.id;
+        const hm = analysisData.homeMatches || [];
+        const am = analysisData.awayMatches || [];
+
+        const homeForm = engine.calculateFormScore(hm, homeId);
+        const awayForm = engine.calculateFormScore(am, awayId);
+        const homeFormAtHome = engine.calculateFormScore(hm, homeId, 'home');
+        const awayFormAway = engine.calculateFormScore(am, awayId, 'away');
+        const homeSplit = engine.calculateOverUnder(hm, homeId);
+        const awaySplit = engine.calculateOverUnder(am, awayId);
+        const h2hData = engine.analyzeH2H(analysisData.h2h || [], homeId, awayId);
+        const homeSlots = engine.analyzeGoalsByTimeSlot(analysisData.homeHistEvs || [], homeId);
+        const awaySlots = engine.analyzeGoalsByTimeSlot(analysisData.awayHistEvs || [], awayId);
+
+        const hGF = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsFor / homeFormAtHome.total : homeForm.goalsFor / Math.max(homeForm.total, 1);
+        const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
+        const aGF = awayFormAway.total >= 3 ? awayFormAway.goalsFor / awayFormAway.total : awayForm.goalsFor / Math.max(awayForm.total, 1);
+        const aGA = awayFormAway.total >= 3 ? awayFormAway.goalsAgainst / awayFormAway.total : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
+        const poissonProbs = engine.calcMatchProbabilities(hGF, hGA, aGF, aGA, f.league.name || '');
+
+        const city = summary?.gameInfo?.venue?.address?.city || '';
+
+        const calcRest = (matches) => {
+          if (!matches?.length) return null;
+          const lastDate = matches[0]?.fixture?.date;
+          if (!lastDate) return null;
+          const matchDate = new Date(f.fixture.date);
+          return Math.floor((matchDate - new Date(lastDate)) / (1000 * 60 * 60 * 24));
+        };
+
+        const picksResult = engine.generatePicks({
+          homeStats: null, awayStats: null,
+          homeForm, awayForm, homeFormAtHome, awayFormAway,
+          homeSplitStats: homeSplit, awaySplitStats: awaySplit,
+          h2hData, homeSlots, awaySlots, poissonProbs,
+          isLive: false, liveClock: "0'", liveHomeGoals: 0, liveAwayGoals: 0,
+          marketInsight: analysisData.marketInsight,
+          homeCornersData: analysisData.homeCornersData,
+          awayCornersData: analysisData.awayCornersData,
+          homeCardsData: analysisData.homeCardsData,
+          awayCardsData: analysisData.awayCardsData,
+          injuries: analysisData.injuries || [],
+          marketOdds: analysisData.marketOdds,
+          matchStandings: analysisData.matchStandings,
+          advancedStats: analysisData.advancedStats,
+          refereeStats: analysisData.refereeStats,
+          leagueName: f.league.name,
+          homeTeamName: f.teams.home.name,
+          awayTeamName: f.teams.away.name,
+          city,
+          homeRestDays: calcRest(hm),
+          awayRestDays: calcRest(am),
+          homeHistory: hm,
+          awayHistory: am,
+        });
+
+        const picks = Array.isArray(picksResult) ? picksResult : (picksResult?.picks || []);
+        if (picks.length === 0) return;
+
+        // Obtener stats reales del boxscore
+        const getTeamStat = (homeAway, statName) => {
+          const team = summary?.boxscore?.teams?.find(t => t.homeAway === homeAway);
+          if (!team) return 0;
+          const stat = team.statistics?.find(s => s.name === statName);
+          return stat ? parseInt(stat.displayValue) || 0 : 0;
+        };
+        const totalCorners = getTeamStat('home', 'wonCorners') + getTeamStat('away', 'wonCorners');
+        const totalYellow = getTeamStat('home', 'yellowCards') + getTeamStat('away', 'yellowCards');
+        const totalRed = getTeamStat('home', 'redCards') + getTeamStat('away', 'redCards');
+        const totalCards = totalYellow + totalRed;
+
+        let matchHits = 0, matchMisses = 0;
+        const pickDetails = [];
+
+        picks.forEach(p => {
+          const win = evaluatePick(p, homeScore, awayScore, totalGoals, totalCorners, totalCards, totalYellow, totalRed);
+          if (win) { hits++; matchHits++; } else { misses++; matchMisses++; }
+          totalPicks++;
+          pickDetails.push({
+            selection: p.selection,
+            market: p.market,
+            probability: p.probability,
+            odds: p.odds,
+            tier: p.tier,
+            isHit: win,
+          });
+        });
+
+        matchReports.push({
+          id: eventId,
+          home: f.teams.home.name,
+          away: f.teams.away.name,
+          homeLogo: f.teams.home.logo,
+          awayLogo: f.teams.away.logo,
+          homeScore,
+          awayScore,
+          league: f.league.name,
+          leagueLogo: f.league.logo,
+          hits: matchHits,
+          misses: matchMisses,
+          picks: pickDetails,
+        });
+      } catch (e) {
+        skippedMatches++;
+      }
+    };
+
+    // Pool de 4 workers
+    let idx = 0;
+    const worker = async () => {
+      while (idx < allFixtures.length) {
+        const i = idx++;
+        await processMatch(allFixtures[i]);
+      }
+    };
+    await Promise.all(Array(4).fill(null).map(() => worker()));
+
+    // Ordenar por fallos (más fallos primero, para estudio)
+    matchReports.sort((a, b) => b.misses - a.misses);
+
+    const auditResult = {
+      date,
+      totalMatches: matchReports.length,
+      rawFixturesCount: allFixtures.length,
+      skippedMatches,
+      totalPicks,
+      hits,
+      misses,
+      winRate: totalPicks > 0 ? parseFloat(((hits / totalPicks) * 100).toFixed(1)) : 0,
+      reports: matchReports,
+    };
+
+    // Cachear en Supabase (solo si ya terminó el día)
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (date < todayStr && matchReports.length > 0) {
+      try {
+        await supabase.from('analysis_cache').upsert({
+          event_id: auditCacheKey,
+          data: auditResult,
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        }, { onConflict: 'event_id' });
+      } catch (_) {}
+    }
+
+    return res.json({ success: true, fromCache: false, data: auditResult });
+  } catch (err) {
+    logger.error('stats/audit', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3001;

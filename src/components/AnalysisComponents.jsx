@@ -275,8 +275,8 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
   }, [isLive, livePicks.length]);
 
 
-  /* ── Individual Pick Card ── */
-  const PickCard = ({ pick }) => {
+  /* ── Individual Pick Card (Square / Vertical) ── */
+  const PickCard = ({ pick, isValueBet = false }) => {
     const [saved, setSaved] = useState(false);
 
     const handleSave = () => {
@@ -287,139 +287,106 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
       }
     };
 
+    // 💎 SNIPER con cuota baja (<1.50) es un BANKER, no una Value Bet
+    const pickOdds = parseFloat(pick.odds) || 0;
+    const isSniperBanker = pick.tier === '💎' && pickOdds > 0 && pickOdds < 1.50 && pick.probability >= 78;
+    const isValue = !isSniperBanker && (isValueBet || pick.category === 'valor' || pick.tier === '💎');
+    const isSegura = isSniperBanker || pick.category === 'segura' || pick.tier === '🟢';
+
     let accent;
-    if (pick.category === 'segura' || pick.tier === '🟢') {
+    if (isValue) {
+      accent = { color: '#f59e0b', bg: 'rgba(245,158,11,0.07)', border: 'rgba(245,158,11,0.30)' };
+    } else if (isSegura) {
       accent = { color: '#10b981', bg: 'rgba(16,185,129,0.06)', border: 'rgba(16,185,129,0.18)' };
-    } else if (pick.category === 'valor' || pick.tier === '💎') {
-      accent = { color: '#3b9eff', bg: 'rgba(59,158,255,0.06)', border: 'rgba(59,158,255,0.18)' };
     } else if (pick.probability >= 85) {
       accent = { color: '#00ff88', bg: 'rgba(0,255,136,0.06)', border: 'rgba(0,255,136,0.18)' };
     } else if (pick.probability >= 75) {
       accent = { color: '#3b9eff', bg: 'rgba(59,158,255,0.06)', border: 'rgba(59,158,255,0.18)' };
     } else {
-      accent = { color: '#f59e0b', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.18)' };
+      accent = { color: '#a78bfa', bg: 'rgba(167,139,250,0.06)', border: 'rgba(167,139,250,0.18)' };
     }
 
-    let tierText = pick.tier;
-    if (pick.category === 'segura' || pick.tier === '🟢') tierText = '🟢 BANKER';
-    else if (pick.category === 'valor' || pick.tier === '💎') tierText = '💎 VALUE BET';
-    else if (pick.tier === '🔥') tierText = '🔥 ALTA CONFIANZA';
-    else if (pick.tier === '⭐') tierText = '⭐ BUENA OPCIÓN';
+    let tierText;
+    if (isValue)   tierText = '💎 VALUE BET';
+    else if (isSegura) tierText = '🟢 BANKER';
+    else if (pick.tier === '🔥') tierText = '🔥 EN VIVO';
     else if (pick.tier === '🔵') tierText = '🔵 SUGERIDA';
+    else tierText = '⭐ OPCIÓN';
 
     return (
       <div
-        className="relative rounded-lg border overflow-hidden flex items-stretch group transition-all duration-200 hover:brightness-110 min-h-[110px]"
-        style={{ background: accent.bg, borderColor: accent.border }}
+        className="rounded-3xl p-8 sm:p-10 flex flex-col gap-6 border transition-all cursor-default"
+        style={{
+          background: isValue ? 'rgba(255, 255, 255, 0.02)' : 'rgba(255, 255, 255, 0.01)',
+          borderColor: accent.border,
+          boxShadow: isValue ? `0 4px 24px ${accent.color}15` : 'none',
+        }}
       >
-        {/* Saved flash */}
-        {saved && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-lg z-20 animate-in fade-in zoom-in duration-150">
-            <span className="text-xl">✅</span>
+        {/* Top: Cuota y Probabilidad */}
+        <div className="flex justify-between items-center bg-black/10 p-4 rounded-2xl border border-white/5">
+          <div className="flex flex-col">
+            <span className="text-sm text-slate-500 font-bold mb-1">Cuota</span>
+            <span className="text-5xl font-black tracking-tight" style={{ color: accent.color }}>
+              {pick.odds || '—'}
+            </span>
           </div>
-        )}
-
-        {/* Left: big % block */}
-        <div
-          className="flex flex-col items-center justify-center px-4 py-5 shrink-0 min-w-[90px]"
-          style={{ background: `${accent.color}08`, borderRight: `1px solid ${accent.border}` }}
-        >
-          <span
-            className="text-[40px] font-numbers leading-none tracking-tighter"
-            style={{
-              color: accent.color,
-              textShadow: `0 0 30px ${accent.color}40`,
-            }}
-          >
-            {pick.probability}%
-          </span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.2em] mt-2 opacity-60 text-center"
-            style={{ color: accent.color }}>
-            {tierText}
-          </span>
+          <div className="flex flex-col items-end">
+            <span className="text-sm text-slate-500 font-bold mb-1">Confianza</span>
+            <span className="text-4xl font-black text-white tracking-tight">{pick.probability}%</span>
+          </div>
         </div>
 
-        {/* Right: content */}
-        <div className="flex flex-col justify-between flex-1 px-5 py-5 gap-2">
-          {/* Header row: Market pill and Odds */}
-          <div className="flex items-center justify-between mb-1">
-            <span
-              className="text-[10px] font-bold uppercase tracking-[0.15em] px-2.5 py-1 rounded-full leading-none"
-              style={{ color: accent.color, background: `${accent.color}12` }}
-            >
-              {pick.market}
+        {/* Middle: Selección, Mercado y Narrativa */}
+        <div className="space-y-4 pt-2">
+          <div className="inline-block px-4 py-1.5 rounded-lg text-sm font-bold bg-white/5 text-slate-300">
+            {pick.market}
+          </div>
+          <p className="text-2xl font-bold text-white leading-tight">{pick.selection}</p>
+          
+          {(pick.narrative || pick.argument) && (
+            <p className="text-base text-slate-400 leading-relaxed bg-black/20 p-4 rounded-xl border-l-2 border-slate-700">
+              {pick.narrative || pick.argument}
+            </p>
+          )}
+        </div>
+
+        {/* Bottom: Riesgo y botón grande */}
+        <div className="flex flex-wrap items-center justify-between gap-4 mt-2 pt-5 border-t border-white/5">
+          <span className={`text-sm px-4 py-2 rounded-xl font-bold ${
+            pick.risk === 'Bajo' ? 'bg-emerald-500/10 text-emerald-400'
+            : pick.risk === 'Moderado' ? 'bg-amber-500/10 text-amber-400'
+            : 'bg-red-500/10 text-red-400'
+          }`}>Riesgo: {pick.risk}</span>
+          
+          {saved ? (
+            <span className="flex-1 sm:flex-none px-6 py-3.5 rounded-xl font-bold uppercase text-black bg-accent-green shadow-[0_0_10px_rgba(0,255,136,0.4)] text-center">
+              ✓ Guardada
             </span>
-            {pick.odds && (
-              <div 
-                className="flex items-center gap-2 px-3 py-1 rounded-lg border border-white/5"
-                style={{ background: 'rgba(255,255,255,0.03)' }}
-              >
-                <span className="text-[9px] uppercase tracking-widest font-bold opacity-40 text-white">Cuota</span>
-                <span className="text-[16px] font-numbers text-white leading-none">{pick.odds}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Selection — the main text, big and bold */}
-          <div>
-            <p className="text-[18px] font-bold text-white leading-tight tracking-tight">{pick.selection}</p>
-            {/* Narrative: explicación en lenguaje sencillo (prioridad) */}
-            {(pick.narrative || pick.argument) && (
-              <>
-                <div className="mt-3 mb-2 border-t border-white/5" />
-                <p className="text-[13px] text-slate-300 leading-relaxed">
-                  {pick.narrative || pick.argument}
-                </p>
-              </>
-            )}
-          </div>
-
-          {/* Bottom row */}
-          <div className="flex items-center justify-between gap-1 mt-3">
-            <div className="flex gap-2">
-              <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${
-                pick.risk === 'Bajo' ? 'bg-accent-green/15 text-accent-green'
-                : pick.risk === 'Moderado' ? 'bg-amber-400/15 text-amber-400'
-                : 'bg-red-500/15 text-red-400'
-              }`}>{pick.risk}</span>
-              
-              {pick.suggestedStake > 0 && (
-                <span className="text-[10px] px-2.5 py-1 rounded-full font-bold uppercase flex items-center gap-1 bg-blue-500/15 text-blue-400 border border-blue-500/20" title="Stake sugerido según Criterio de Kelly">
-                  💰 Stake {pick.suggestedStake}%
-                </span>
-              )}
-            </div>
-            
-            {saved ? (
-              <span className="text-[11px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest text-surface-900 bg-accent-green flex items-center gap-1 shadow-[0_0_10px_rgba(0,255,136,0.5)]">
-                ✓ Guardada
-              </span>
-            ) : (
-              <button 
-                onClick={handleSave}
-                className="text-[11px] px-3 py-1.5 rounded-lg font-bold uppercase tracking-widest transition-colors duration-200 border cursor-pointer"
-                style={{ 
-                  color: accent.color, 
-                  background: `${accent.color}15`,
-                  borderColor: `${accent.color}40`,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = accent.color;
-                  e.currentTarget.style.color = '#000';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = `${accent.color}15`;
-                  e.currentTarget.style.color = accent.color;
-                }}
-              >
-                Guardar Apuesta
-              </button>
-            )}
-          </div>
+          ) : (
+            <button
+              onClick={handleSave}
+              className="flex-1 sm:flex-none px-6 py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-2 transition-all border cursor-pointer"
+              style={{ color: accent.color, background: `${accent.color}15`, borderColor: `${accent.color}30` }}
+              onMouseEnter={e => { e.currentTarget.style.background = accent.color; e.currentTarget.style.color = '#000'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = `${accent.color}15`; e.currentTarget.style.color = accent.color; }}
+            >
+              <CheckCircle2 size={20} />
+              Guardar Apuesta
+            </button>
+          )}
         </div>
       </div>
     );
   };
+
+  /* ── Section Divider ── */
+  const SectionHeader = ({ label, count, color = 'text-slate-500' }) => (
+    <div className="flex items-center gap-3 mt-4 mb-2">
+      <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${color}`}>{label}</span>
+      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-white/5 text-slate-500">{count}</span>
+      <div className="flex-1 h-px bg-white/5" />
+    </div>
+  );
 
   /* ── Tab switcher ── */
   return (
@@ -448,13 +415,9 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
         </button>
       </div>
 
-      {/* Cards grid */}
-      {activeTab === 'pre' && (
-        preMatchPicks.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {preMatchPicks.map((pick, i) => <PickCard key={`pre-${i}`} pick={pick} />)}
-          </div>
-        ) : (
+      {/* Cards grid — pre-partido con secciones por prioridad */}
+      {activeTab === 'pre' && (() => {
+        if (preMatchPicks.length === 0) return (
           <div className="text-center py-8 bg-surface-900/30 rounded-xl border border-white/5">
             <div className="text-3xl mb-3 opacity-50">⚽</div>
             <p className="text-sm font-semibold text-slate-300 mb-1">Sin apuestas pre-partido</p>
@@ -462,12 +425,76 @@ function PicksTable({ picks, reason, onSavePick, isLive }) {
               {reason || 'El motor predictivo no encontró una ventaja matemática clara para recomendar una apuesta antes del encuentro.'}
             </p>
           </div>
-        )
-      )}
+        );
+
+        const sortByOddsAndProb = (a, b) => {
+          const oddsA = parseFloat(a.odds) || 0;
+          const oddsB = parseFloat(b.odds) || 0;
+          if (oddsB !== oddsA) return oddsB - oddsA;
+          return (b.probability || 0) - (a.probability || 0);
+        };
+
+        // Helper: un 💎 SNIPER con cuota baja es un Banker, no un Value Bet
+        const isRealValueBet = (p) => {
+          const odds = parseFloat(p.odds) || 0;
+          // 💎 con cuota baja (<1.50) y alta prob (>=78%) → es BANKER/SNIPER, no valor
+          if (p.tier === '💎' && odds > 0 && odds < 1.50 && p.probability >= 78) return false;
+          return p.category === 'valor' || p.tier === '💎';
+        };
+
+        // Grupo 1: Alto Valor — value bets reales + cuotas atractivas (>= 1.50)
+        const valueBets = preMatchPicks
+          .filter(p => isRealValueBet(p))
+          .sort(sortByOddsAndProb);
+        const highOddsPicks = preMatchPicks
+          .filter(p => !isRealValueBet(p) && (parseFloat(p.odds) || 0) >= 1.50)
+          .sort(sortByOddsAndProb);
+        const altoValor = [...valueBets, ...highOddsPicks];
+
+        // Grupo 2: Más Seguras — cuota < 1.50 O bankers SNIPER con cuota baja
+        const seguras = preMatchPicks
+          .filter(p => !isRealValueBet(p) && (parseFloat(p.odds) || 0) < 1.50)
+          .sort((a, b) => (b.probability || 0) - (a.probability || 0));
+
+        return (
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-1">
+            {/* 1. ALTO VALOR — value bets + cuotas atractivas */}
+            {altoValor.length > 0 && (
+              <>
+                <SectionHeader
+                  label="🔥 Apuestas de Alto Valor"
+                  count={altoValor.length}
+                  color="text-amber-400"
+                />
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-6">
+                  {valueBets.map((pick, i) => <PickCard key={`val-${i}`} pick={pick} isValueBet />)}
+                  {highOddsPicks.length > 0 && valueBets.length > 0 && (
+                    <div className="col-span-full flex items-center gap-3 px-1 pt-1">
+                      <span className="text-[10px] font-black uppercase tracking-[0.2em] text-yellow-400/70">⚡ Cuotas Atractivas</span>
+                      <div className="flex-1 h-px bg-yellow-400/10" />
+                    </div>
+                  )}
+                  {highOddsPicks.map((pick, i) => <PickCard key={`high-${i}`} pick={pick} />)}
+                </div>
+              </>
+            )}
+
+            {/* 2. MÁS SEGURAS — todas las de cuota baja */}
+            {seguras.length > 0 && (
+              <>
+                <SectionHeader label="🛡️ Apuestas Más Seguras" count={seguras.length} color="text-emerald-600" />
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6">
+                  {seguras.map((pick, i) => <PickCard key={`seg-${i}`} pick={pick} />)}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
       
       {activeTab === 'live' && (
         livePicks.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
             {livePicks.map((pick, i) => <PickCard key={`live-${i}`} pick={pick} />)}
           </div>
         ) : (

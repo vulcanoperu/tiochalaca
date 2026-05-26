@@ -2132,10 +2132,15 @@ let filtered = consistentPicks.filter(p => {
         if (favorsHome && homeACL.isAtRisk) return false; // 🚫 Local Big4 en rotación
         if (favorsAway && awayACL.isAtRisk) return false;  // 🚫 Visitante Big4 en rotación
       }
+      // 💎 VALUE BETs bypasan el umbral de probabilidad: el motor detectó que el
+      // mercado está pagando MENOS de lo que la probabilidad real justifica.
+      // En ese caso, el pick tiene valor aunque no supere el 88%.
+      if (p.tier === '💎') return true;
       // Umbral normal de probabilidad
       const threshold = isBig4Match ? 82 : 88;
       if (p.probability < threshold) return false;
     }
+
 
     // ── MÓDULO AFA (Liga Profesional Argentina) ──────────────────────
     const isAFA = leagueName.toLowerCase().includes('argentina');
@@ -2299,25 +2304,27 @@ let filtered = consistentPicks.filter(p => {
     return p;
   });
 
-  // Ordenar: primero las seguras (por probabilidad), luego las de valor (por cuota)
+  // Ordenar: primero valor/💎 (mayor cuota), luego moderada (mayor prob), luego segura
   filtered.sort((a, b) => {
-    // Prioridad: segura > moderada > valor
-    const catOrder = { segura: 0, moderada: 1, valor: 2 };
-    const catDiff = (catOrder[a.category] || 1) - (catOrder[b.category] || 1);
-    if (catDiff !== 0) return catDiff;
+    // 💎 siempre va primero
+    const aIsValue = a.tier === '💎' || a.category === 'valor';
+    const bIsValue = b.tier === '💎' || b.category === 'valor';
+    if (aIsValue && !bIsValue) return -1;
+    if (!aIsValue && bIsValue) return 1;
+    if (aIsValue && bIsValue) return (parseFloat(b.odds) || 0) - (parseFloat(a.odds) || 0);
     return b.probability - a.probability;
   });
 
-  // ── Límite: máximo 8 picks (más espacio para ambos perfiles) ───
-  const livePicks   = filtered.filter(p => p.tier === '🔥');
-  const seguras     = filtered.filter(p => p.tier !== '🔥' && p.category === 'segura');
-  const moderadas   = filtered.filter(p => p.tier !== '🔥' && p.category === 'moderada');
-  const valor       = filtered.filter(p => p.tier !== '🔥' && p.category === 'valor');
-  console.log("=== FILTERED PICKS ===", JSON.stringify(filtered, null, 2));
-const finalPicks  = [
-    ...seguras.slice(0, 3),
+  // ── Límite: máximo 8 picks — 💎 tier SIEMPRE va a valor ────────
+  const livePicks = filtered.filter(p => p.tier === '🔥');
+  // Un pick con tier 💎 es Value Bet aunque category diga 'segura'
+  const valor     = filtered.filter(p => p.tier !== '🔥' && (p.tier === '💎' || p.category === 'valor'));
+  const moderadas = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'moderada');
+  const seguras   = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'segura');
+  const finalPicks = [
+    ...valor.slice(0, 3),
     ...moderadas.slice(0, 2),
-    ...valor.slice(0, 2),
+    ...seguras.slice(0, 2),
     ...livePicks.slice(0, 1)
   ];
 

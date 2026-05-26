@@ -241,7 +241,9 @@ export default function RecommendationsPage() {
     recommendations.forEach(rec => {
       if (rec.picks) {
         rec.picks.forEach(p => {
-          if (p.tier === '💎' || (p.probability && p.probability >= 78)) {
+          const isVip = p.tier === '💎' || (p.probability && p.probability >= 78);
+          const isValueBet = p.category === 'valor' || (p.argument && p.argument.toLowerCase().includes('value bet'));
+          if (isVip || isValueBet) {
             list.push({ ...p, match: rec.match });
           }
         });
@@ -256,7 +258,7 @@ export default function RecommendationsPage() {
     recommendations.forEach(rec => {
       if (rec.picks) {
         rec.picks.forEach(p => {
-          if (p.argument && p.argument.toLowerCase().includes('value bet')) {
+          if (p.category === 'valor' || (p.argument && p.argument.toLowerCase().includes('value bet'))) {
             list.push({ ...p, match: rec.match });
           }
         });

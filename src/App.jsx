@@ -60,7 +60,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-grid-subtle text-slate-200 relative overflow-hidden">
+    <div className="min-h-screen bg-grid-subtle text-slate-200 relative overflow-x-clip">
       {/* ── Ambient Background Glows ── */}
       <div className="fixed top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full opacity-30 mix-blend-screen pointer-events-none z-0" style={{ background: 'radial-gradient(circle, #72BF01 0%, transparent 70%)', filter: 'blur(100px)' }} />
       <div className="fixed bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] rounded-full opacity-20 mix-blend-screen pointer-events-none z-0" style={{ background: 'radial-gradient(circle, #3A7817 0%, transparent 70%)', filter: 'blur(120px)' }} />

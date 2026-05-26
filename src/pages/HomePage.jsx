@@ -57,46 +57,42 @@ function TopPickCard({ pick, fixture, index }) {
   return (
     <Link
       to={`/partido/${fixture?.fixture?.id}`}
-      className="group relative block overflow-hidden rounded-2xl border border-transparent bg-black/60 hover:bg-black/40 hover:border-transparent transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_20px_60px_rgba(0,0,0,0.5)]"
-      style={index === 0 ? { borderColor: 'rgba(114,191,1,0.25)', background: 'rgba(10,20,5,0.85)' } : {}}
+      className="group relative block overflow-hidden rounded-3xl bg-surface-900/40 hover:bg-surface-900/60 border border-white/5 hover:border-white/10 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl"
     >
-      {/* Index badge */}
-      <div className="absolute top-4 left-4 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black"
-        style={{ background: index === 0 ? 'rgba(114,191,1,0.2)' : 'rgba(255,255,255,0.05)', color: index === 0 ? '#BFF102' : '#475569' }}>
-        {index + 1}
-      </div>
 
       {/* Live indicator */}
       {isLive && (
-        <div className="absolute top-4 right-4 flex items-center gap-1.5 px-2 py-1 rounded-full bg-red-500/15 border border-red-500/30">
+        <div className="absolute top-6 right-6 flex items-center gap-1.5 px-2 py-1 rounded-full bg-red-500/15 border border-red-500/30">
           <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-          <span className="text-[9px] font-black uppercase tracking-widest text-red-400">En Vivo</span>
+          <span className="text-[9px] font-black uppercase tracking-widest text-red-400">
+            {fixture?.fixture?.status?.elapsed ? `En Vivo • ${fixture.fixture.status.elapsed}'` : 'En Vivo'}
+          </span>
         </div>
       )}
 
-      <div className="p-6 pt-8">
+      <div className="p-8 pt-10">
         {/* Match */}
         <div className="mb-5">
           <div className="flex items-center gap-2 mb-3">
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{fixture?.league?.name}</span>
             {!isLive && (
-              <span className="text-[10px] font-bold text-slate-600 bg-white/5 px-2 py-0.5 rounded">
-                <Clock size={9} className="inline mr-1" />{kickoff}
+              <span className="text-[11px] font-black text-slate-200 bg-white/10 px-2.5 py-1 rounded-md border border-white/10 flex items-center shadow-sm">
+                <Clock size={11} className="mr-1.5 text-slate-400" />{kickoff}
               </span>
             )}
           </div>
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-3">
               {fixture?.teams?.home?.logo && (
-                <img src={fixture.teams.home.logo} alt="" className="w-7 h-7 object-contain" />
+                <img src={fixture.teams.home.logo} alt="" className="w-6 h-6 object-contain" />
               )}
-              <span className="text-base font-bold text-slate-100">{fixture?.teams?.home?.name}</span>
+              <span className="text-sm font-semibold text-slate-200">{fixture?.teams?.home?.name}</span>
             </div>
             <div className="flex items-center gap-3">
               {fixture?.teams?.away?.logo && (
-                <img src={fixture.teams.away.logo} alt="" className="w-7 h-7 object-contain" />
+                <img src={fixture.teams.away.logo} alt="" className="w-6 h-6 object-contain" />
               )}
-              <span className="text-base font-bold text-slate-100">{fixture?.teams?.away?.name}</span>
+              <span className="text-sm font-semibold text-slate-200">{fixture?.teams?.away?.name}</span>
             </div>
           </div>
         </div>
@@ -104,37 +100,31 @@ function TopPickCard({ pick, fixture, index }) {
         {/* Separator */}
         <div className="h-px bg-white/5 mb-5" />
 
-        {/* Prediction */}
-        <div className="space-y-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex-1">
-              <p className="text-[10px] font-black uppercase tracking-widest mb-1" style={{ color: tierColor }}>{tierText}</p>
-              <p className="text-sm font-bold text-white leading-snug">{pick.selection}</p>
-              {pick.market && (
-                <p className="text-[10px] text-slate-500 mt-1 font-medium">{pick.market}</p>
-              )}
-            </div>
-            {pick.odds && !isNaN(Number(pick.odds)) && (
-              <div className="text-right shrink-0">
-                <p className="text-[9px] font-black uppercase tracking-widest text-slate-600 mb-1">Cuota</p>
-                <p className="text-xl font-black font-mono" style={{ color: '#BFF102' }}>{Number(pick.odds).toFixed(2)}</p>
-              </div>
-            )}
+        {/* Prediction - SENIOR FRIENDLY */}
+        <div className="space-y-4">
+          <div className="flex-1">
+             <p className="text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: tierColor }}>{tierText}</p>
+             <p className="text-lg md:text-xl font-bold text-white leading-tight">{pick.selection}</p>
+             {pick.market && (
+               <p className="text-xs font-semibold text-slate-400 mt-1.5 bg-white/5 inline-block px-2.5 py-1 rounded-lg">{pick.market}</p>
+             )}
           </div>
-
-          {/* Confidence */}
-          <div className="flex items-center justify-between">
-            {confidenceDots(pick.probability)}
-            <span className="text-[11px] font-black font-mono" style={{ color: pick.probability >= 85 ? '#72BF01' : pick.probability >= 72 ? '#f59e0b' : '#64748b' }}>
-              {pick.probability}%
-            </span>
+          
+          <div className="flex items-center justify-between bg-black/40 rounded-2xl p-4 border border-white/5 mt-4">
+             <div className="flex flex-col">
+               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Cuota</p>
+               <p className="text-4xl font-bold tracking-tight" style={{ color: '#BFF102' }}>
+                 {pick.odds ? (isNaN(Number(pick.odds.toString().replace('+', ''))) ? pick.odds.toString().replace('+', '') : Number(pick.odds.toString().replace('+', '')).toFixed(2)) : '—'}
+               </p>
+             </div>
+             
+             <div className="flex flex-col items-end">
+               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Confianza</p>
+               <p className="text-2xl font-bold tracking-tight" style={{ color: pick.probability >= 85 ? '#72BF01' : pick.probability >= 72 ? '#f59e0b' : '#64748b' }}>
+                 {pick.probability}%
+               </p>
+             </div>
           </div>
-        </div>
-
-        {/* CTA */}
-        <div className="mt-5 flex items-center justify-between text-[11px] font-black uppercase tracking-widest text-slate-500 group-hover:text-slate-300 transition-colors">
-          <span>Ver detalles</span>
-          <ChevronRight size={14} className="group-hover:translate-x-1 transition-transform" />
         </div>
       </div>
     </Link>
@@ -188,10 +178,10 @@ export default function HomePage() {
       const live = fixtures.filter(f => ['1H', '2H', 'HT', 'ET'].includes(f.fixture?.status?.short));
       setLiveMatches(live);
 
-      // 3. Pick upcoming/live matches only (max 15 for analysis)
+      // 3. Pick upcoming/live matches only (max 40 for analysis)
       const candidates = fixtures
         .filter(f => !['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short))
-        .slice(0, 15);
+        .slice(0, 40);
 
       if (!candidates.length) { setLoading(false); return; }
 
@@ -275,15 +265,40 @@ export default function HomePage() {
           refereeStats: ad.refereeStats,
         });
 
-        const bestPick = picksRes?.picks?.find(p => p.tier === '🔥' || p.category === 'valor' || p.category === 'segura') || picksRes?.picks?.[0];
-        if (bestPick && (bestPick.probability >= 70 || bestPick.category === 'valor' || bestPick.category === 'segura')) {
+        // Seleccionar la mejor apuesta del partido
+        const sortedMatchPicks = [...(picksRes?.picks || [])].sort((a, b) => {
+          const aIsValue = a.category === 'valor' || a.tier === '💎';
+          const bIsValue = b.category === 'valor' || b.tier === '💎';
+          if (aIsValue && !bIsValue) return -1;
+          if (!aIsValue && bIsValue) return 1;
+          
+          // Ordenar por valor combinado de cuota * probabilidad
+          const scoreA = (parseFloat(a.odds) || 0) * (a.probability || 0);
+          const scoreB = (parseFloat(b.odds) || 0) * (b.probability || 0);
+          return scoreB - scoreA;
+        });
+
+        const bestPick = sortedMatchPicks[0];
+        if (bestPick) {
           allTopPicks.push({ pick: bestPick, fixture });
         }
       }
 
-      // 5. Sort by probability and take top 5
-      allTopPicks.sort((a, b) => b.pick.probability - a.pick.probability);
-      setTopPicks(allTopPicks.slice(0, 5));
+      // 5. Ordenar todas las tarjetas: Value bets primero, luego por combinación de cuota y probabilidad
+      allTopPicks.sort((a, b) => {
+        const aIsValue = a.pick.category === 'valor' || a.pick.tier === '💎';
+        const bIsValue = b.pick.category === 'valor' || b.pick.tier === '💎';
+        
+        if (aIsValue && !bIsValue) return -1;
+        if (!aIsValue && bIsValue) return 1;
+        
+        // Ordenamos por valor combinado (cuota * probabilidad)
+        const scoreA = (parseFloat(a.pick.odds) || 0) * (a.pick.probability || 0);
+        const scoreB = (parseFloat(b.pick.odds) || 0) * (b.pick.probability || 0);
+        return scoreB - scoreA;
+      });
+      
+      setTopPicks(allTopPicks);
 
     } catch (e) {
       console.error('[HomePage] Error loading top picks:', e);
@@ -322,17 +337,17 @@ export default function HomePage() {
           style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(114,191,1,0.06) 0%, transparent 70%)' }} />
 
         <div className="relative z-10 text-center max-w-3xl mx-auto">
-          <h1 className="text-5xl md:text-6xl font-black tracking-tight leading-none mb-3">
+          <h1 className="text-5xl md:text-6xl font-black tracking-tight leading-none mb-6">
             <span className="text-white">Mejores</span>{' '}
-            <span style={{ color: '#BFF102' }}>Picks</span>{' '}
+            <span style={{ color: '#BFF102' }}>Apuestas</span>{' '}
             <span className="text-white">de {selectedDayOffset === 0 ? 'Hoy' : 'Mañana'}</span>
           </h1>
 
-          <p className="text-slate-400 text-sm md:text-base font-medium max-w-xl mx-auto leading-relaxed mb-6">
-            El motor de análisis de Tio Chalaca procesa miles de estadísticas para darte los pronósticos más seguros del día.
+          <p className="text-base md:text-lg text-slate-200 font-bold max-w-3xl mx-auto leading-relaxed mb-10 drop-shadow-sm">
+            ¡No adivines más! Descubre las apuestas más seguras y rentables del día,<br className="hidden md:block" /> calculadas automáticamente para que ganes más dinero con menos esfuerzo.
           </p>
 
-          <div className="flex flex-col items-center gap-3">
+          <div className="flex flex-col items-center gap-5">
             {/* Day Toggle */}
             <div className="inline-flex bg-white/5 rounded-full p-1.5 border border-white/10 shadow-sm">
               <button 
@@ -370,7 +385,7 @@ export default function HomePage() {
 
               {topPicks.length > 0 && (
                 <span className="text-[10px] font-black uppercase tracking-widest text-[#BFF102] bg-[#BFF102]/10 px-4 py-1.5 rounded-full border border-[#BFF102]/20">
-                  {topPicks.length} Picks Seguros
+                  {topPicks.length} Apuestas Seguras
                 </span>
               )}
 
@@ -388,10 +403,10 @@ export default function HomePage() {
       <div className="mb-16">
         {loading ? (
           <div className="py-20">
-            <Loader text="Calculando mejores picks del día…" />
+            <Loader text="Calculando mejores apuestas del día…" />
           </div>
         ) : topPicks.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
             {topPicks.map(({ pick, fixture }, i) => (
               <TopPickCard key={fixture.fixture.id} pick={pick} fixture={fixture} index={i} />
             ))}
@@ -401,10 +416,10 @@ export default function HomePage() {
             <div className="-mt-16 py-6 text-center border border-white/10 bg-white/5 rounded-3xl shadow-lg">
               <Trophy size={32} strokeWidth={1.5} className="mx-auto mb-3 text-slate-400" />
               <p className="text-white font-bold uppercase tracking-widest text-sm mb-1">
-                No hay picks disponibles aún
+                No hay apuestas disponibles aún
               </p>
               <p className="text-slate-300 text-xs max-w-md mx-auto leading-relaxed">
-                No se encontraron picks de alta probabilidad. Los picks se generan a medida que hay partidos programados con datos suficientes.
+                No se encontraron apuestas de alta probabilidad. Las apuestas se generan a medida que hay partidos programados con datos suficientes.
               </p>
             </div>
 
@@ -430,7 +445,7 @@ export default function HomePage() {
             <div className="text-center mb-14">
               <Trophy size={32} strokeWidth={1.5} className="mx-auto mb-4 text-slate-500" />
               <p className="text-slate-300 font-semibold text-sm mb-1">
-                No hay picks disponibles en este momento
+                No hay apuestas disponibles en este momento
               </p>
               <p className="text-slate-500 text-xs max-w-sm mx-auto leading-relaxed">
                 Nuestro motor no detectó ventajas claras ahora mismo, pero hay mucho más por descubrir.
@@ -499,13 +514,13 @@ export default function HomePage() {
               <Shield size={20} className="text-accent-green" />
             </div>
             <h3 className="text-base font-bold text-white mb-2 group-hover:text-accent-green transition-colors">
-              Tus picks guardados
+              Tus apuestas guardadas
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed mb-4">
               Haz seguimiento de las apuestas que seleccionaste. Mide tu rendimiento y aprende de cada jugada.
             </p>
             <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest transition-colors" style={{ color: '#BFF102' }}>
-              <span>Ver mis picks</span>
+              <span>Ver mis apuestas</span>
               <ChevronRight size={12} className="group-hover:translate-x-1 transition-transform" />
             </div>
           </Link>

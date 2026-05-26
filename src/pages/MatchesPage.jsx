@@ -3,12 +3,13 @@
  * Lista completa de partidos del día con filtros.
  * Extraído y renombrado desde el antiguo Home.jsx.
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, Filter, Search, X, Trophy, ChevronDown } from 'lucide-react';
 import AccessibleMatchCard from '../components/AccessibleMatchCard';
 import Loader from '../components/Loader';
 import { enqueuePrefetch } from '../services/prefetchQueue';
+import { calculateFormScore, calculateOverUnder, analyzeH2H, analyzeGoalsByTimeSlot, calcMatchProbabilities, generatePicks } from '../services/analysisEngine';
 
 function localDay(d = new Date()) {
   const y = d.getFullYear();
@@ -58,7 +59,7 @@ const LEAGUE_CONTINENT = {
 
 const groupOrder = ['Internacionales', 'Sudamérica', 'Norteamérica', 'Europa', 'Asia y Oceanía', 'África'];
 
-function Section({ title, groups, accent }) {
+function Section({ title, groups, accent, matchPicks = {} }) {
   const accentClass = accent === 'green' ? 'text-accent-green' : accent === 'blue' ? 'text-accent-blue' : 'text-slate-500';
   const dotClass = accent === 'green' ? 'bg-accent-green shadow-[0_0_10px_#00ff88]' : accent === 'blue' ? 'bg-accent-blue' : 'bg-slate-700';
 
@@ -76,8 +77,8 @@ function Section({ title, groups, accent }) {
               {league?.logo && <img src={league.logo} alt="" className="w-6 h-6 object-contain grayscale brightness-200" />}
               <span className="text-sm font-black uppercase tracking-widest text-slate-300">{league?.name}</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 md:gap-12">
-              {matches.map(f => <AccessibleMatchCard key={f.fixture?.id} fixture={f} />)}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+              {matches.map(f => <AccessibleMatchCard key={f.fixture?.id} fixture={f} pick={matchPicks[f.fixture?.id]} />)}
             </div>
           </div>
         ))}
@@ -101,6 +102,7 @@ export default function MatchesPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [matchPicks, setMatchPicks] = useState({});
   const dropdownRef = useRef(null);
 
   useEffect(() => {
@@ -210,13 +212,14 @@ export default function MatchesPage() {
     groupedLeagues[g].sort((a, b) => isPeruLeague(a) ? -1 : isPeruLeague(b) ? 1 : (a.name || '').localeCompare(b.name || ''));
   });
 
-  const filtered = fixtures.filter(f => {
+  const filtered = useMemo(() => fixtures.filter(f => {
     let matchDateLocal = '';
     try {
       if (!f.fixture?.date) return false;
       matchDateLocal = localDay(new Date(f.fixture.date));
     } catch(e) { return false; }
     const isLive = LIVE_STATUSES.includes(f.fixture?.status?.short);
+
     if (selected === today) {
       if (matchDateLocal !== selected && !isLive) return false;
     } else {
@@ -228,7 +231,129 @@ export default function MatchesPage() {
     const matchesSearch = !search || [f.teams?.home?.name, f.teams?.away?.name, f.league?.name]
       .some(s => s?.toLowerCase().includes(search.toLowerCase()));
     return matchesLeague && matchesSearch;
-  });
+  }), [fixtures, selected, today, leagueFilter, search]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadPicks() {
+      const pendingIds = filtered
+        .map(f => f.fixture?.id)
+        .filter(id => id && !matchPicks[id]);
+
+      if (!pendingIds.length) return;
+
+      for (let i = 0; i < pendingIds.length; i += 20) {
+        if (!active) break;
+        const chunk = pendingIds.slice(i, i + 20);
+        
+        try {
+          const batchRes = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/analysis/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ eventIds: chunk }),
+          });
+          
+          if (!batchRes.ok) continue;
+          
+          const { data: batchData } = await batchRes.json();
+          if (!batchData) continue;
+          
+          const newPicks = {};
+          
+          for (const fixture of filtered) {
+            const fid = fixture.fixture?.id;
+            if (!chunk.includes(fid)) continue;
+            
+            const ad = batchData[fid];
+            if (!ad) continue;
+
+            const homeId = fixture.teams?.home?.id;
+            const awayId = fixture.teams?.away?.id;
+            if (!homeId || !awayId) continue;
+
+            const hm = ad.homeMatches || [];
+            const am = ad.awayMatches || [];
+
+            const homeForm = calculateFormScore(hm, homeId);
+            const awayForm = calculateFormScore(am, awayId);
+            const homeFormAtHome = calculateFormScore(hm, homeId, 'home');
+            const awayFormAway = calculateFormScore(am, awayId, 'away');
+            const homeSplit = calculateOverUnder(hm, homeId);
+            const awaySplit = calculateOverUnder(am, awayId);
+            const h2hData = analyzeH2H(ad.h2h || [], homeId, awayId);
+
+            const hGF = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsFor / homeFormAtHome.total : homeForm.goalsFor / Math.max(homeForm.total, 1);
+            const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
+            const aGF = awayFormAway.total >= 3 ? awayFormAway.goalsFor / awayFormAway.total : awayForm.goalsFor / Math.max(awayForm.total, 1);
+            const aGA = awayFormAway.total >= 3 ? awayFormAway.goalsAgainst / awayFormAway.total : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
+            const poisson = calcMatchProbabilities(hGF, hGA, aGF, aGA, fixture.league?.name || '');
+
+            const homeSlots = analyzeGoalsByTimeSlot(ad.homeHistEvs, homeId);
+            const awaySlots = analyzeGoalsByTimeSlot(ad.awayHistEvs, awayId);
+
+            const calcRest = (matches) => {
+              if (!matches?.length) return null;
+              const lastDate = matches[0]?.fixture?.date;
+              if (!lastDate) return null;
+              return Math.floor((Date.now() - new Date(lastDate).getTime()) / 86_400_000);
+            };
+
+            const picksRes = generatePicks({
+              homeStats: null, awayStats: null,
+              h2hData, homeForm, awayForm,
+              homeSplitStats: homeSplit, awaySplitStats: awaySplit,
+              isLive: false, liveClock: "0'", liveHomeGoals: 0, liveAwayGoals: 0,
+              marketInsight: ad.marketInsight,
+              homeCornersData: ad.homeCornersData,
+              awayCornersData: ad.awayCornersData,
+              homeCardsData: ad.homeCardsData,
+              awayCardsData: ad.awayCardsData,
+              homeSlots, awaySlots,
+              homeFormAtHome, awayFormAway,
+              poissonProbs: poisson,
+              injuries: ad.injuries,
+              homeTeamName: fixture.teams.home.name,
+              awayTeamName: fixture.teams.away.name,
+              leagueName: fixture.league?.name || '',
+              homeRestDays: calcRest(hm),
+              awayRestDays: calcRest(am),
+              homeHistory: hm,
+              awayHistory: am,
+              city: fixture.city,
+              marketOdds: ad.marketOdds,
+              matchStandings: ad.matchStandings,
+              advancedStats: ad.advancedStats,
+              refereeStats: ad.refereeStats,
+            });
+
+            const sortedMatchPicks = [...(picksRes?.picks || [])].sort((a, b) => {
+              const aIsValue = a.category === 'valor' || a.tier === '💎';
+              const bIsValue = b.category === 'valor' || b.tier === '💎';
+              if (aIsValue && !bIsValue) return -1;
+              if (!aIsValue && bIsValue) return 1;
+              const scoreA = (parseFloat(a.odds) || 0) * (a.probability || 0);
+              const scoreB = (parseFloat(b.odds) || 0) * (b.probability || 0);
+              return scoreB - scoreA;
+            });
+
+            if (sortedMatchPicks[0]) {
+              newPicks[fid] = sortedMatchPicks[0];
+            }
+          }
+          
+          if (Object.keys(newPicks).length > 0 && active) {
+            setMatchPicks(prev => ({ ...prev, ...newPicks }));
+          }
+        } catch (err) {
+          console.error("Error fetching batch picks in MatchesPage:", err);
+        }
+      }
+    }
+    
+    loadPicks();
+    return () => { active = false; };
+  }, [filtered, matchPicks]);
 
   const liveMatches = filtered.filter(f => LIVE_STATUSES.includes(f.fixture?.status?.short));
   const finishedMatches = filtered.filter(f => FINISHED_STATUSES.includes(f.fixture?.status?.short));
@@ -267,7 +392,7 @@ export default function MatchesPage() {
           {/* Controls */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
             {/* Date Tabs */}
-            <div className="flex items-center gap-2 p-1.5 rounded-xl bg-white/5 border border-white/8">
+            <div className="flex items-center gap-2 p-1.5 rounded-xl bg-white/5">
               {dateTabs.map(({ key, label }) => (
                 <button
                   key={key}
@@ -290,7 +415,7 @@ export default function MatchesPage() {
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder="Buscar equipo..."
-                className="h-12 pl-11 pr-10 rounded-xl text-[14px] font-bold w-52 bg-white/5 backdrop-blur-md border border-white/8 text-slate-100 placeholder-slate-600 focus:outline-none focus:bg-white/8 focus:border-accent-green/40 transition-all"
+                className="h-12 pl-11 pr-10 rounded-xl text-[14px] font-bold w-52 bg-white/5 backdrop-blur-md text-slate-100 placeholder-slate-600 focus:outline-none focus:bg-white/10 transition-all"
               />
               {search && (
                 <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white bg-white/10 p-1 rounded-full transition-colors">
@@ -303,8 +428,8 @@ export default function MatchesPage() {
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className={`h-12 w-48 flex items-center justify-between px-4 rounded-xl text-[14px] font-bold border transition-all duration-200 ${
-                  isDropdownOpen ? 'bg-accent-green/15 border-accent-green/40 text-accent-green' : 'bg-white/5 border-white/8 text-slate-300 hover:border-white/15'
+                className={`h-12 w-48 flex items-center justify-between px-4 rounded-xl text-[14px] font-bold transition-all duration-200 ${
+                  isDropdownOpen ? 'bg-accent-green/15 text-accent-green' : 'bg-white/5 text-slate-300 hover:bg-white/10'
                 }`}
               >
                 <div className="flex items-center gap-2 overflow-hidden">
@@ -357,13 +482,13 @@ export default function MatchesPage() {
       {loading ? <Loader /> : (
         <div className="space-y-24">
           {liveMatches.length > 0 && (
-            <Section title="En Vivo" groups={groupAndSortLeagues(liveMatches)} accent="green" />
+            <Section title="En Vivo" groups={groupAndSortLeagues(liveMatches)} accent="green" matchPicks={matchPicks} />
           )}
           {upcomingMatches.length > 0 && (
-            <Section title="Próximos Encuentros" groups={groupAndSortLeagues(upcomingMatches)} accent="blue" />
+            <Section title="Próximos Encuentros" groups={groupAndSortLeagues(upcomingMatches)} accent="blue" matchPicks={matchPicks} />
           )}
           {finishedMatches.length > 0 && (
-            <Section title="Resultados Recientes" groups={groupAndSortLeagues(finishedMatches)} />
+            <Section title="Resultados Recientes" groups={groupAndSortLeagues(finishedMatches)} matchPicks={matchPicks} />
           )}
 
           {!loading && fixtures.length > 0 && filtered.length === 0 && (
