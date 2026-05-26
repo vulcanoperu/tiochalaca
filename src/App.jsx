@@ -14,6 +14,7 @@ import LoginPage from './pages/LoginPage';
 import StatsPage from './pages/StatsPage';
 import AdminPage from './admin/AdminPage';
 import { useRoleSync } from './hooks/useRoleSync';
+import { logoutUser } from './services/backendApi';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(
@@ -56,6 +57,33 @@ export default function App() {
         <LoginPage onLogin={handleLogin} />
         <Toaster position="top-right" />
       </>
+    );
+  }
+
+  // Bloquear a los usuarios 'pending'
+  if (user.role === 'pending') {
+    return (
+      <div className="min-h-screen bg-[#030508] flex items-center justify-center p-6 text-center relative overflow-hidden">
+        <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
+          <div className="absolute top-[20%] -right-[10%] w-[50%] h-[50%] rounded-full bg-orange-600/10 mix-blend-screen filter blur-[120px] opacity-50" />
+        </div>
+        <div className="bg-white/[0.03] backdrop-blur-2xl border border-white/10 p-10 rounded-[2rem] shadow-2xl max-w-md w-full relative z-10">
+          <div className="w-16 h-16 bg-orange-500/20 rounded-full flex items-center justify-center mx-auto mb-6 border border-orange-500/30">
+             <span className="text-3xl">⏳</span>
+          </div>
+          <h2 className="text-3xl font-black text-white mb-4 tracking-tight">Cuenta en Revisión</h2>
+          <p className="text-lg text-white/60 mb-8 font-medium">
+            Tu acceso está pendiente de aprobación. El administrador debe activar tu cuenta para que puedas ver los pronósticos.
+          </p>
+          <button 
+            onClick={async () => { await logoutUser(); setIsAuthenticated(false); }}
+            className="w-full py-4 rounded-[1.2rem] text-lg font-bold transition-all bg-white/5 border border-white/10 hover:bg-white/10 text-white"
+          >
+            Cerrar Sesión
+          </button>
+        </div>
+        <Toaster position="top-right" />
+      </div>
     );
   }
 
