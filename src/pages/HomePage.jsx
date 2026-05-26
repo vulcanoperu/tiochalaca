@@ -114,7 +114,7 @@ function TopPickCard({ pick, fixture, index }) {
              <div className="flex flex-col">
                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Cuota</p>
                <p className="text-4xl font-bold tracking-tight" style={{ color: '#BFF102' }}>
-                 {pick.odds ? (isNaN(Number(pick.odds.toString().replace('+', ''))) ? pick.odds.toString().replace('+', '') : Number(pick.odds.toString().replace('+', '')).toFixed(2)) : '—'}
+                 {pick.odds ? Number(pick.odds).toFixed(2) : '—'}
                </p>
              </div>
              
@@ -241,7 +241,10 @@ export default function HomePage() {
           homeStats: null, awayStats: null,
           h2hData, homeForm, awayForm,
           homeSplitStats: homeSplit, awaySplitStats: awaySplit,
-          isLive: false, liveClock: "0'", liveHomeGoals: 0, liveAwayGoals: 0,
+          isLive: ['1H', '2H', 'HT', 'ET', 'P'].includes(fixture.fixture?.status?.short),
+          liveClock: fixture.fixture?.status?.elapsed ? String(fixture.fixture.status.elapsed) + "'" : "0'",
+          liveHomeGoals: parseInt(fixture.goals?.home ?? 0),
+          liveAwayGoals: parseInt(fixture.goals?.away ?? 0),
           marketInsight: ad.marketInsight,
           homeCornersData: ad.homeCornersData,
           awayCornersData: ad.awayCornersData,

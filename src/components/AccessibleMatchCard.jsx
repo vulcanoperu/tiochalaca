@@ -92,7 +92,7 @@ export default function AccessibleMatchCard({ fixture, pick, onClick }) {
              <div className="flex items-center gap-4 text-right shrink-0">
                <div className="flex flex-col">
                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Cuota</p>
-                 <p className="text-sm font-bold text-[#BFF102]">{pick.odds ? Number(pick.odds.toString().replace('+', '')).toFixed(2) : '—'}</p>
+                 <p className="text-sm font-bold text-[#BFF102]">{pick.odds ? Number(pick.odds).toFixed(2) : '—'}</p>
                </div>
                <div className="flex flex-col">
                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Confianza</p>

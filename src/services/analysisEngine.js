@@ -1314,7 +1314,7 @@ export function generatePicks({
     }
 
     if (!pick.odds) {
-      pick.odds = finalOdds ? finalOdds.toFixed(2) : '1.80+';
+      pick.odds = finalOdds ? finalOdds.toFixed(2) : '1.80';
     }
 
     // ── Fase 2: Criterio de Kelly (Gestión de Banca) ─────────────
@@ -1897,7 +1897,7 @@ export function generatePicks({
         market: 'Estrategia en Vivo',
         selection: 'Apostar "Más de 1.5 goles" si llegan 0-0 al minuto 30',
         probability: 70,
-        odds: '1.80+',
+        odds: '1.80',
         tier: '🔥',
         argument: `Si el partido llega al minuto 30 sin goles, la cuota de goles subirá exponencialmente. Entrar ahí.`,
         risk: 'Moderado'
@@ -1907,7 +1907,7 @@ export function generatePicks({
         market: 'Estrategia en Vivo',
         selection: 'Victoria Local si empieza perdiendo',
         probability: 65,
-        odds: '2.50+',
+        odds: '2.50',
         tier: '🔥',
         argument: `El local es superior. Si el visitante anota primero de forma inesperada, apostar a la remontada o empate (1X) local tendrá mucho valor.`,
         risk: 'Alto'
@@ -1917,7 +1917,7 @@ export function generatePicks({
         market: 'Estrategia en Vivo',
         selection: 'Gol en el 2do Tiempo',
         probability: 75,
-        odds: '1.50+',
+        odds: '1.50',
         tier: '🔥',
         argument: `Si el partido llega empatado al descanso (especialmente 0-0), apostar a que habrá más de 0.5 goles en el segundo tiempo.`,
         risk: 'Moderado'

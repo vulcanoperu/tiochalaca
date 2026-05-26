@@ -144,7 +144,10 @@ export default function RecommendationsPage() {
       const result = generatePicks({
         homeStats: null, awayStats: null, h2hData, homeForm, awayForm,
         homeSplitStats: homeSplit, awaySplitStats: awaySplit,
-        isLive: false, liveClock: "0'", liveHomeGoals: 0, liveAwayGoals: 0,
+        isLive: ['1H', '2H', 'HT', 'ET', 'P'].includes(match.fixture?.status?.short),
+        liveClock: match.fixture?.status?.elapsed ? String(match.fixture.status.elapsed) + "'" : "0'",
+        liveHomeGoals: parseInt(match.goals?.home ?? 0),
+        liveAwayGoals: parseInt(match.goals?.away ?? 0),
         marketInsight: ad.marketInsight,
         homeCornersData: ad.homeCornersData, awayCornersData: ad.awayCornersData,
         homeCardsData: ad.homeCardsData, awayCardsData: ad.awayCardsData,
@@ -441,7 +444,7 @@ export default function RecommendationsPage() {
                          <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse" />
                          <span className="text-[9px] font-black text-accent-green uppercase tracking-widest">Cuota Despistada</span>
                        </div>
-                       <span className="text-[11px] font-black text-surface-900 bg-accent-green px-2 py-0.5 rounded-md shadow-sm">Cuota {pick.odds || '1.80+'}</span>
+                       <span className="text-[11px] font-black text-surface-900 bg-accent-green px-2 py-0.5 rounded-md shadow-sm">Cuota {pick.odds || '1.80'}</span>
                     </div>
 
                     {/* Timestamp de detección */}
