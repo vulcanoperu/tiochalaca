@@ -237,6 +237,17 @@ export function isDerbyMatch(home, away) {
     ['cruz azul', 'américa'],
     ['nacional', 'peñarol'],
     ['colo colo', 'universidad de chile'],
+    // Clásicos Chilenos adicionales
+    ['universidad de chile', 'universidad católica'],
+    ['colo colo', 'universidad católica'],
+    ['deportes concepcion', 'huachipato'],
+    ['deportes concepción', 'huachipato'],
+    ['everton', 'santiago wanderers'],
+    ['la serena', 'coquimbo unido'],
+    ['palestino', 'unión española'],
+    ['palestino', 'audax italiano'],
+    ['unión española', 'audax italiano'],
+    ['cobreloa', 'cobresal'],
     ['millonarios', 'santa fe'],
     ['nacional', 'medellín'],
     ['al nassr', 'al hilal'],
@@ -300,6 +311,61 @@ const HIERARCHY_TEAMS = [
   'flamengo', 'palmeiras', 'sao paulo', 'são paulo', 'corinthians', 'atletico mg', 'atlético mg', 
   'gremio', 'grêmio', 'internacional', 'fluminense', 'botafogo', 'cruzeiro'
 ];
+
+// Nuevos Filtros Élite Conmebol
+const BRAZILIAN_TOP_TEAMS = [
+  'flamengo', 'palmeiras', 'atletico mg', 'atlético mg', 'atletico mineiro',
+  'sao paulo', 'são paulo', 'fluminense', 'botafogo', 'cruzeiro', 'internacional', 'gremio', 'grêmio'
+];
+
+const TROPICAL_OVEN_CITIES = [
+  'barranquilla', 'maracaibo', 'guayaquil', 'fortaleza', 'cuiaba', 'cuiabá',
+  'manaus', 'belem', 'belém', 'sullana', 'piura', 'tarapoto'
+];
+
+const SOUTH_COLD_TEAMS = [
+  'river plate', 'boca juniors', 'racing', 'independiente', 'san lorenzo', 'estudiantes', 'velez', 'vélez',
+  'peñarol', 'nacional montevideo', 'colo colo', 'universidad de chile', 'universidad católica'
+];
+
+const NORTH_CITIES = [
+  'caracas', 'san cristobal', 'san cristóbal', 'barranquilla', 'medellin', 'medellín', 'bogota', 'bogotá',
+  'cali', 'guayaquil', 'quito'
+];
+
+const SOUTH_CITIES = [
+  'buenos aires', 'montevideo', 'santiago', 'porto alegre', 'curitiba', 'rosario', 'mendoza', 'cordoba', 'córdoba'
+];
+
+function checkConmebolTravelAndClimateRisk(awayTeamName, homeCity) {
+  if (!homeCity || !awayTeamName) return null;
+  const cityLow = homeCity.toLowerCase();
+  const awayLow = awayTeamName.toLowerCase();
+  
+  // 1. Horno Tropical
+  const isTropicalOven = TROPICAL_OVEN_CITIES.some(c => cityLow.includes(c));
+  const isSouthColdTeam = SOUTH_COLD_TEAMS.some(t => awayLow.includes(t));
+  
+  if (isTropicalOven && isSouthColdTeam) {
+    return 'climate_heat';
+  }
+
+  // 2. Fatiga de Viaje Extremo
+  const isHomeNorth = NORTH_CITIES.some(c => cityLow.includes(c));
+  const isHomeSouth = SOUTH_CITIES.some(c => cityLow.includes(c));
+  
+  if (isHomeNorth && isSouthColdTeam) {
+    return 'travel_fatigue';
+  }
+  
+  const NORTH_TEAMS = ['millonarios', 'santa fe', 'nacional', 'junior', 'caracas', 'tachira', 'táchira', 'emelec', 'barcelona', 'ldu'];
+  const isAwayNorth = NORTH_TEAMS.some(t => awayLow.includes(t));
+  if (isHomeSouth && isAwayNorth) {
+    return 'travel_fatigue';
+  }
+
+  return null;
+}
 
 function checkCalendarFatigue(history) {
   if (!history || history.length < 3) return false;
@@ -468,6 +534,11 @@ export function generatePicks({
   const homeTotal = homeForm.total || 0;
   const awayTotal = awayForm.total || 0;
   
+  const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
+  const isCupMatch = /cup|copa|taça|pokal|coppa|friendl|libertadores|sudamericana|conmebol/i.test(leagueName);
+  const isConmebolCup = /libertadores|sudamericana|conmebol/i.test(leagueName);
+  const isSudamericana = /sudamericana/i.test(leagueName);
+  
   if (!isLive && (homeTotal < minMatches || awayTotal < minMatches)) {
     const minTeam = homeTotal < awayTotal ? `Local (${homeTotal} PJ)` : `Visitante (${awayTotal} PJ)`;
     return { 
@@ -476,9 +547,6 @@ export function generatePicks({
     };
   }
 
-  const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
-  const isCupMatch = /cup|copa|taça|pokal|coppa|friendl/i.test(leagueName);
-  const isSudamericana = /sudamericana/i.test(leagueName);
   const isDefensiveLeague = /serie a|primeira liga|portugal|italia/i.test(leagueName);
   // ── Liga 1 Perú: Ajuste Especial ─────────────────────────────
   const isLiga1Peru = /liga 1|liga1|peru|perú/i.test(leagueName);
@@ -506,7 +574,8 @@ export function generatePicks({
   // ── #0: Nuevos Factores de Prevención (Fatiga y Altitud) ──────────
   const homeFatigue = checkCalendarFatigue(homeHistory);
   const awayFatigue = checkCalendarFatigue(awayHistory);
-  const altitudeRisk = checkAltitudeRisk(awayTeamName, city, homeTeamName);
+  const altitudeRisk = checkAltitudeRisk(awayTeamName, city, homeTeamName, isCupMatch);
+  const conmebolTravelClimate = isConmebolCup ? checkConmebolTravelAndClimateRisk(awayTeamName, city) : null;
 
   // AJUSTE #1: Resaca Internacional (copas continentales recientes)
   const homeHangover = checkInternationalHangover(homeTeamName, homeHistory);
@@ -543,6 +612,7 @@ export function generatePicks({
   // Penalización por altitud escalonada según origen del visitante
   let altitudePenalty = altitudeRisk === 'high' ? (28 - altitudeSoftening) // Costeño en altura → penalización máxima (suavizada si alta posesión)
                       : altitudeRisk === 'medium' ? 18 // Jerarquía foránea en altura
+                      : altitudeRisk === 'extreme' ? 45 // Altura extrema
                       : 0;
 
   const homeAvgGF = homeForm.total > 0 ? +(homeForm.goalsFor  / homeForm.total).toFixed(2) : 0;
@@ -697,9 +767,10 @@ export function generatePicks({
     return Math.min(unbeatenRatio * 0.8 + winRatio * 0.2, 1);
   };
 
-  // ── SISTEMA DE MOTIVACIÓN Y SUPERVIVENCIA (Solo LaLiga España) ──
-  // Personalizado para España: Top 4 van a Champions.
-  if (isLaLiga && matchStandings && matchStandings.total >= 10) {
+  // ── SISTEMA DE MOTIVACIÓN Y SUPERVIVENCIA (Global) ──
+  // Personalizado para ligas con formato tradicional de Descenso y Copas Internacionales.
+  const hasRelegationSystem = !leagueName.toLowerCase().includes('mls');
+  if (hasRelegationSystem && matchStandings && matchStandings.total >= 10) {
     const tot = matchStandings.total;
     const hr = matchStandings.homeRank;
     const ar = matchStandings.awayRank;
@@ -840,6 +911,75 @@ export function generatePicks({
     isCupMatch,
     leagueName,
   });
+  
+  // ── Normalización de probabilidades
+  let adjHomeProb = eloCombined.home;
+  let adjAwayProb = eloCombined.away;
+  let adjDrawProb = eloCombined.draw;
+  let totalAdj = adjHomeProb + adjDrawProb + adjAwayProb;
+  adjHomeProb = Math.round((adjHomeProb / totalAdj) * 100);
+  adjAwayProb = Math.round((adjAwayProb / totalAdj) * 100);
+  adjDrawProb = 100 - adjHomeProb - adjAwayProb;
+
+  // ── Altitud Extrema (Ex. La Paz, Juliaca, Cusco)
+  if (altitudeRisk === 'extreme') {
+    adjAwayProb *= 0.65;
+    adjDrawProb *= 1.15;
+    adjHomeProb = Math.min(adjHomeProb * 1.35, 95);
+  }
+
+  // ── Brazilian Boost (Supremacía Económica)
+  let homeIsBrazTop = false, awayIsBrazTop = false;
+  if (isConmebolCup) {
+    homeIsBrazTop = BRAZILIAN_TOP_TEAMS.some(t => homeTeamName.toLowerCase().includes(t));
+    awayIsBrazTop = BRAZILIAN_TOP_TEAMS.some(t => awayTeamName.toLowerCase().includes(t));
+    
+    const isHomeSouthCold = SOUTH_COLD_TEAMS.some(t => homeTeamName.toLowerCase().includes(t));
+    const isAwaySouthCold = SOUTH_COLD_TEAMS.some(t => awayTeamName.toLowerCase().includes(t));
+
+    if (homeIsBrazTop && !awayIsBrazTop && !isAwaySouthCold) {
+      adjHomeProb *= 1.12; 
+      adjAwayProb *= 0.85; 
+    } else if (awayIsBrazTop && !homeIsBrazTop && !isHomeSouthCold && altitudeRisk !== 'high' && altitudeRisk !== 'extreme') {
+      adjAwayProb *= 1.08;
+      adjHomeProb *= 0.90;
+    }
+  }
+
+  // ── Riesgo de Rotación (Fase de Grupos - Fecha 5 o 6)
+  let isDeadRubberRotation = false;
+  let rotationTarget = null;
+  if (isConmebolCup && matchStandings && matchStandings.total === 4) {
+    const hr = matchStandings.homeRank;
+    const ar = matchStandings.awayRank;
+    if (hr === 1 && homeForm.score > 85) {
+      isDeadRubberRotation = true;
+      rotationTarget = 'home';
+      adjHomeProb *= 0.85;
+      adjDrawProb *= 1.15;
+    } else if (ar === 1 && awayForm.score > 85) {
+      isDeadRubberRotation = true;
+      rotationTarget = 'away';
+      adjAwayProb *= 0.85;
+      adjDrawProb *= 1.15;
+    }
+  }
+
+  // ── Clima Extremo Conmebol
+  if (conmebolTravelClimate === 'climate_heat') {
+    adjAwayProb *= 0.93; 
+    adjHomeProb *= 1.05;
+  } else if (conmebolTravelClimate === 'travel_fatigue') {
+    adjAwayProb *= 0.96;
+    adjHomeProb *= 1.02;
+  }
+
+  // Renormalizar tras los factores Élite
+  totalAdj = adjHomeProb + adjDrawProb + adjAwayProb;
+  adjHomeProb = Math.round((adjHomeProb / totalAdj) * 100);
+  adjAwayProb = Math.round((adjAwayProb / totalAdj) * 100);
+  adjDrawProb = 100 - adjHomeProb - adjAwayProb;
+  
   // Cada 50 pts de diferencia Elo = 1 punto de efectividad (cap ±10)
   const eloAdj = Math.min(Math.max(Math.round(eloCombined._elo.eloDiff / 50), -10), 10);
   const eloLabel = `Elo: ${eloCombined._elo.homeElo} vs ${eloCombined._elo.awayElo} (Δ${eloCombined._elo.eloDiff >= 0 ? '+' : ''}${eloCombined._elo.eloDiff})`;
@@ -939,7 +1079,7 @@ export function generatePicks({
       homeEffectiveScore = Math.max(homeEffectiveScore, 58); // Piso reducido: defensa porosa detectada
     }
   }
-  if (isAwayHierarchy && altitudeRisk !== 'high') {
+  if (isAwayHierarchy && altitudeRisk !== 'high' && altitudeRisk !== 'extreme') {
     awayEffectiveScore = Math.max(awayEffectiveScore, 60); // Piso de jerarquía de visita (si no hay altura extrema)
   }
 
@@ -1156,8 +1296,19 @@ export function generatePicks({
       return `Los dos equipos anotan seguido — tanto el local como el visitante tienen jugadores que generan peligro y terminan dentro del marcador. ${goalsNote} No se trata solo de que haya goles en el partido, sino de que los dos equipos aparezcan en el tablero. Según sus promedios, eso es lo más habitual.`;
     }
 
-    // Handicap Asiático
+    // Handicap Asiático (Negativo: -0.5)
     if (market === 'Handicap Asiático') {
+      // ── Handicap Positivo (+1.5 / +2.0): Protección al underdog ──
+      if (sel.includes('+')) {
+        const line = sel.includes('+2') ? '+2.0' : '+1.5';
+        const protTeam = sel.toLowerCase().includes('visitante') ? away : home;
+        const favTeam  = sel.toLowerCase().includes('visitante') ? home : away;
+        if (line === '+2.0') {
+          return `${protTeam} llega como el equipo más débil según las cuotas, pero no es un equipo que se deje golear fácilmente. Con el hándicap ${line}, solo pierdes la apuesta si ${favTeam} gana por 3 o más goles — algo poco frecuente. Si ${favTeam} gana por exactamente 2, te devuelven el dinero. Y si gana por 1, empatan o ${protTeam} gana, cobras. ${goalsNote} Es la forma más inteligente de respaldar al underdog sin arriesgar demasiado.`;
+        }
+        return `Con el hándicap ${line} le das una ventaja virtual de 1.5 goles a ${protTeam}. Eso significa que solo pierdes si ${favTeam} gana por 2 o más goles. Un resultado ajustado como 1-0 o 2-1 ya te da ganador. ${goalsNote} Es una apuesta defensiva que aprovecha la solidez del rival menos favorito.`;
+      }
+      // ── Handicap Negativo (-0.5): Favorito claro ──
       if (homeStar && sel.includes('local')) {
         return `${home} tiene demasiada jerarquía para conformarse con un empate acá. El handicap asiático -0.5 es más inteligente que apostar a la victoria directa: te da exactamente la misma lógica pero con una cuota más atractiva. ${goalsNote} Si ${home} gana, tú cobras — y según el análisis, ganar es lo que el modelo espera.`;
       }
@@ -1256,11 +1407,23 @@ export function generatePicks({
 
       // Doble Oportunidad (Derivada)
       // Cuota 1X = (Local * Empate) / (Local + Empate)
-      if (pick.selection === 'Local empata o gana (1X)' && marketOdds.home && marketOdds.draw) {
+      if (pick.selection === 'Local o Empate (1X)' && marketOdds.home && marketOdds.draw) {
         mOdds = (marketOdds.home * marketOdds.draw) / (marketOdds.home + marketOdds.draw);
       }
-      if (pick.selection === 'Visitante empata o gana (X2)' && marketOdds.away && marketOdds.draw) {
+      if (pick.selection === 'Visitante o Empate (X2)' && marketOdds.away && marketOdds.draw) {
         mOdds = (marketOdds.away * marketOdds.draw) / (marketOdds.away + marketOdds.draw);
+      }
+
+      // Handicap Asiático Positivo (Derivada del spread de ESPN)
+      // ESPN provee spread -1.5 del favorito. El +1.5 del underdog es el inverso.
+      // Para +2.0 aplicamos un factor de ajuste conservador.
+      if (pick.selection.includes('+1.5') && marketOdds.spreadOddsAway) {
+        mOdds = marketOdds.spreadOddsAway; // Cuota directa del +1.5 de ESPN
+      }
+      if (pick.selection.includes('+2.0') && marketOdds.spreadOddsAway) {
+        // +2.0 es una línea más segura que +1.5, así que la cuota es menor
+        mOdds = 1 + ((marketOdds.spreadOddsAway - 1) * 0.65);
+        if (mOdds < 1.20) mOdds = 1.25;
       }
 
       if (mOdds && mOdds > 1.01) {
@@ -1279,7 +1442,7 @@ export function generatePicks({
     }
 
     if (!pick.odds) {
-      pick.odds = finalOdds ? finalOdds.toFixed(2) : '1.80+';
+      pick.odds = finalOdds ? finalOdds.toFixed(2) : '1.80';
     }
 
     // ── Fase 2: Criterio de Kelly (Gestión de Banca) ─────────────
@@ -1610,7 +1773,7 @@ export function generatePicks({
     }
   }
 
-  if (homeEffectiveScore >= 58 && awayEffectiveScore <= 52 && effectiveAdv >= 12) {
+  if (!isLive && homeEffectiveScore >= 58 && awayEffectiveScore <= 52 && effectiveAdv >= 12) {
     let prob = Math.min(Math.round(homeEffectiveScore * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4) + officialHomeBoost + survivalBoostHomeWin, 86);
     if (prob >= 60) {
       const splitNote = homeFormAtHome?.total >= 3 ? ` (Casa: ${homeFormAtHome.wins}G/${homeFormAtHome.total}PJ)` : '';
@@ -1627,7 +1790,7 @@ export function generatePicks({
   }
 
   // ── Ganador: Visitante ─────────────────────────────────────────
-  if (awayEffectiveScore >= 58 && homeEffectiveScore <= 52 && -effectiveAdv >= 12) {
+  if (!isLive && awayEffectiveScore >= 58 && homeEffectiveScore <= 52 && -effectiveAdv >= 12) {
     let prob = Math.min(Math.round(awayEffectiveScore * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4) + officialAwayBoost + survivalBoostAwayWin, 86);
     if (prob >= 60) {
       const splitNote = awayFormAway?.total >= 3 ? ` (Fuera: ${awayFormAway.wins}G/${awayFormAway.total}PJ)` : '';
@@ -1644,7 +1807,7 @@ export function generatePicks({
   }
 
   // ── Handicap Asiático -0.5 (Local favorito claro) ──────────────
-  if (homeForm.score >= 65 && homeScoreAdv >= 18 && (h2hData?.homeWinPct ?? 0) >= 40) {
+  if (!isLive && homeForm.score >= 65 && homeScoreAdv >= 18 && (h2hData?.homeWinPct ?? 0) >= 40) {
     const prob = Math.min(Math.round(homeForm.score * 0.55 + (h2hData?.homeWinPct ?? 50) * 0.35 + officialHomeWinPct * 0.1), 85);
     if (prob >= 55) {
       addPick({
@@ -1660,7 +1823,7 @@ export function generatePicks({
   }
 
   // ── Handicap Asiático -0.5 (Visitante favorito claro) ──────────
-  if (awayForm.score >= 65 && -homeScoreAdv >= 18 && (h2hData?.awayWinPct ?? 0) >= 40) {
+  if (!isLive && awayForm.score >= 65 && -homeScoreAdv >= 18 && (h2hData?.awayWinPct ?? 0) >= 40) {
     const prob = Math.min(Math.round(awayForm.score * 0.55 + (h2hData?.awayWinPct ?? 50) * 0.35 + officialAwayWinPct * 0.1), 85);
     if (prob >= 55) {
       addPick({
@@ -1672,6 +1835,125 @@ export function generatePicks({
         risk: 'Moderado',
         units: '3-4u',
       });
+    }
+  }
+
+  // ── Handicap Asiático Positivo: Underdog +1.5 / +2.0 ──────────
+  // Mercado defensivo: respalda al equipo menos favorito con protección.
+  // Se activa cuando hay una brecha grande de cuotas (favorito masivo) PERO
+  // el underdog demuestra solidez defensiva o resiliencia en el H2H.
+  //
+  // Lógica de activación:
+  //   1. El favorito tiene moneyline <= -400 (probabilidad implícita >= 80%)
+  //   2. El underdog concede pocos goles (avgGA <= 1.3) O el H2H fue cerrado
+  //   3. El underdog no fue goleado en sus últimos partidos
+  //
+  // Línea seleccionada:
+  //   +2.0 → Cuando la brecha es extrema (moneyline <= -450) y defensa sólida
+  //   +1.5 → Cuando la brecha es grande pero no extrema
+  if (!isLive && marketOdds) {
+    const homeML = marketOdds.home || 0;
+    const awayML = marketOdds.away || 0;
+
+    // Determinar quién es el favorito masivo y quién es el underdog
+    const homeFavMassive = homeML > 0 && homeML <= 1.25; // Cuota decimal <= 1.25 = favorito brutal
+    const awayFavMassive = awayML > 0 && awayML <= 1.25;
+
+    // Alternativa: detectar favorito por moneyline americano si las cuotas vienen en ese formato
+    const homeMLAmerican = marketOdds.homeMoneyLine || 0;
+    const awayMLAmerican = marketOdds.awayMoneyLine || 0;
+    const homeFavByML = homeMLAmerican <= -400 || homeFavMassive;
+    const awayFavByML = awayMLAmerican <= -400 || awayFavMassive;
+
+    // También detectamos favorito masivo por la diferencia de effectiveScore
+    const homeFavByScore = effectiveAdv >= 25;
+    const awayFavByScore = -effectiveAdv >= 25;
+
+    const isMassiveFavorite = homeFavByML || awayFavByML || homeFavByScore || awayFavByScore;
+    const favoriteIsHome = homeFavByML || homeFavByScore;
+
+    if (isMassiveFavorite) {
+      // El underdog es el equipo contrario al favorito
+      const underdogName   = favoriteIsHome ? awayTeamName : homeTeamName;
+      const favoriteName   = favoriteIsHome ? homeTeamName : awayTeamName;
+      const underdogAvgGA  = favoriteIsHome ? awayAvgGA : homeAvgGA;
+      const underdogForm   = favoriteIsHome ? awayForm : homeForm;
+      const underdogSide   = favoriteIsHome ? 'Visitante' : 'Local';
+      const favoriteScore  = favoriteIsHome ? homeEffectiveScore : awayEffectiveScore;
+      const underdogScore  = favoriteIsHome ? awayEffectiveScore : homeEffectiveScore;
+
+      // Condiciones de solidez defensiva del underdog
+      const defenseSolid  = underdogAvgGA <= 1.3;
+      const h2hWasTight   = h2hData && h2hData.avgGoals <= 2.5;
+      const underdogNotCollapsing = underdogForm.score >= 35; // No está en caída libre
+
+      // Score diferencial para elegir la línea
+      const scoreDiff = Math.abs(effectiveAdv);
+
+      if ((defenseSolid || h2hWasTight) && underdogNotCollapsing) {
+        // ── +2.0: Brecha extrema + defensa sólida del underdog ──
+        // Solo si la diferencia de scores es >= 30 o el favorito tiene moneyline <= -450
+        const isExtremeFav = (homeMLAmerican <= -450 || awayMLAmerican <= -450) ||
+                             (homeML > 0 && homeML <= 1.20) || (awayML > 0 && awayML <= 1.20) ||
+                             scoreDiff >= 30;
+
+        if (isExtremeFav && defenseSolid) {
+          // Probabilidad: P(underdog pierde por <= 1 gol) + P(empate) + P(underdog gana)
+          // Aproximación via Poisson: P(diff <= 1) para el underdog
+          let probHA20 = 0;
+          const lH = favoriteIsHome ? lambdaHome : lambdaAway;
+          const lA = favoriteIsHome ? lambdaAway : lambdaHome;
+          for (let f = 0; f <= 6; f++) {
+            for (let u = 0; u <= 6; u++) {
+              const p = poissonProb(lH, f) * poissonProb(lA, u);
+              // Underdog "gana" con +2.0 si: pierde por 0-1, empata, o gana
+              if (f - u <= 1) probHA20 += p;
+            }
+          }
+          const prob20 = Math.min(Math.round(probHA20 * 100), 92);
+
+          if (prob20 >= 60) {
+            const h2hNote = h2hWasTight ? ` H2H cerrado (${h2hData.avgGoals} goles/p).` : '';
+            addPick({
+              market: 'Handicap Asiático',
+              selection: `${underdogSide} +2.0 (Pierde por ≤1, empate o victoria)`,
+              probability: prob20,
+              tier: prob20 >= 82 ? '🟢' : prob20 >= 72 ? '🔵' : '🟡',
+              argument: `${underdogName} concede solo ${underdogAvgGA} goles/p → defensa ordenada contra favorito masivo.${h2hNote} Con +2.0: si pierde por 1 gol cobras, por 2 te devuelven, solo fallas si golean por 3+. Forma efectiva: ${favoriteName} ${favoriteScore}% vs ${underdogName} ${underdogScore}%.`,
+              risk: prob20 >= 78 ? 'Bajo' : 'Moderado',
+              units: '3-4u',
+            });
+          }
+        }
+
+        // ── +1.5: Brecha grande pero no extrema, o defensa menos sólida ──
+        // Se activa si no se generó el +2.0, o si la brecha es moderada
+        if (!isExtremeFav || !defenseSolid) {
+          let probHA15 = 0;
+          const lH2 = favoriteIsHome ? lambdaHome : lambdaAway;
+          const lA2 = favoriteIsHome ? lambdaAway : lambdaHome;
+          for (let f = 0; f <= 6; f++) {
+            for (let u = 0; u <= 6; u++) {
+              const p = poissonProb(lH2, f) * poissonProb(lA2, u);
+              // Underdog "gana" con +1.5 si: pierde por 0-1 gol, empata, o gana
+              if (f - u <= 1) probHA15 += p;
+            }
+          }
+          const prob15 = Math.min(Math.round(probHA15 * 100), 90);
+
+          if (prob15 >= 62) {
+            addPick({
+              market: 'Handicap Asiático',
+              selection: `${underdogSide} +1.5 (Pierde por ≤1 o no pierde)`,
+              probability: prob15,
+              tier: prob15 >= 80 ? '🟢' : prob15 >= 70 ? '🔵' : '🟡',
+              argument: `${underdogName} no se deja golear fácil (${underdogAvgGA} GA/p). Con +1.5: solo fallas si el favorito gana por 2+ goles. Forma efectiva: ${favoriteName} ${favoriteScore}% vs ${underdogName} ${underdogScore}%.`,
+              risk: prob15 >= 75 ? 'Bajo' : 'Moderado',
+              units: '2-3u',
+            });
+          }
+        }
+      }
     }
   }
 
@@ -1743,7 +2025,7 @@ export function generatePicks({
         market: 'Estrategia en Vivo',
         selection: 'Apostar "Más de 1.5 goles" si llegan 0-0 al minuto 30',
         probability: 70,
-        odds: '1.80+',
+        odds: '1.80',
         tier: '🔥',
         argument: `Si el partido llega al minuto 30 sin goles, la cuota de goles subirá exponencialmente. Entrar ahí.`,
         risk: 'Moderado'
@@ -1753,20 +2035,10 @@ export function generatePicks({
         market: 'Estrategia en Vivo',
         selection: 'Victoria Local si empieza perdiendo',
         probability: 65,
-        odds: '2.50+',
+        odds: '2.50',
         tier: '🔥',
         argument: `El local es superior. Si el visitante anota primero de forma inesperada, apostar a la remontada o empate (1X) local tendrá mucho valor.`,
         risk: 'Alto'
-      });
-    } else {
-       addPick({
-        market: 'Estrategia en Vivo',
-        selection: 'Gol en el 2do Tiempo',
-        probability: 75,
-        odds: '1.50+',
-        tier: '🔥',
-        argument: `Si el partido llega empatado al descanso (especialmente 0-0), apostar a que habrá más de 0.5 goles en el segundo tiempo.`,
-        risk: 'Moderado'
       });
     }
   }
@@ -1964,6 +2236,7 @@ export function generatePicks({
      // 🚨 MODO DESCENSO: Ambos en el sótano (Duelo de Miedo)
      if (homeInRelegation && awayInRelegation) {
          isRelegationBattle = true;
+         const combinedUnder25 = ((100 - (homeSplitStats?.over25Pct || 50)) + (100 - (awaySplitStats?.over25Pct || 50))) / 2;
          if (!isLive && combinedUnder25 >= 60) {
             addPick({
               market: 'Total de Goles',
@@ -2065,14 +2338,25 @@ export function generatePicks({
     const under25 = findPicks(p => p.selection === 'Menos de 2.5 goles');
     resolveConflict(over25, under25, 'Over 2.5 vs Under 2.5');
 
-    // ── Regla 7: Handicap Local + X2 / Handicap Visitante + 1X ──
-    const haLocal = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local'));
+    // ── Regla 7: Handicap Negativo Local + X2 / Handicap Negativo Visitante + 1X ──
+    const haLocalNeg = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local') && p.selection.includes('-'));
     const x2Final = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('X2') || (p.selection.includes('Visitante') && p.selection.includes('Empate'))));
-    resolveConflict(haLocal, x2Final, 'Handicap Local vs X2');
+    resolveConflict(haLocalNeg, x2Final, 'Handicap -0.5 Local vs X2');
 
-    const haAway = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante'));
+    const haAwayNeg = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante') && p.selection.includes('-'));
     const x1Final = findPicks(p => p.market === 'Doble Oportunidad' && (p.selection.includes('1X') || (p.selection.includes('Local') && p.selection.includes('Empate'))));
-    resolveConflict(haAway, x1Final, 'Handicap Visitante vs 1X');
+    resolveConflict(haAwayNeg, x1Final, 'Handicap -0.5 Visitante vs 1X');
+
+    // ── Regla 9: Handicap Positivo (+1.5/+2.0) + Victoria del mismo lado ──
+    // HA +1.5 Visitante no contradice Victoria Local (es coherente: ambos dicen que el local gana)
+    // PERO HA +1.5 Visitante SÍ contradice HA -0.5 Visitante (uno dice que gana, el otro que pierde ajustado)
+    const haLocalPos = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local') && p.selection.includes('+'));
+    const haLocalNeg2 = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Local') && p.selection.includes('-'));
+    resolveConflict(haLocalPos, haLocalNeg2, 'HA + Local vs HA - Local');
+
+    const haAwayPos = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante') && p.selection.includes('+'));
+    const haAwayNeg2 = findPicks(p => p.market === 'Handicap Asiático' && p.selection.includes('Visitante') && p.selection.includes('-'));
+    resolveConflict(haAwayPos, haAwayNeg2, 'HA + Visitante vs HA - Visitante');
 
     // ── Regla 8: Doble Oportunidad duplicada del mismo lado ──
     // (Ej: dos picks "1X" generados por Poisson + Survival Boost)
@@ -2101,8 +2385,7 @@ export function generatePicks({
   const consistentPicks = resolveContradictoryPicks(picks);
 
   // Filtro: picks con tier definido y probabilidad >= umbrales inteligentes
-  console.log("=== RAW PICKS ===", JSON.stringify(consistentPicks, null, 2));
-let filtered = consistentPicks.filter(p => {
+  let filtered = consistentPicks.filter(p => {
     if (!p.tier) return false;
     
     // Filtro Apagón (Blackout Filter)
@@ -2122,8 +2405,11 @@ let filtered = consistentPicks.filter(p => {
     const awayIsBig4 = SAUDI_BIG4.some(t => awayTeamName?.includes(t));
     const isBig4Match = isSaudi && (homeIsBig4 || awayIsBig4);
 
-    // Poda de Ganador Directo (1X2)
-    if (p.market === 'Ganador del Partido' || p.market === 'Handicap Asiático') {
+    // Poda de Ganador Directo (1X2) y Handicap Negativo (-0.5)
+    // NOTA: Los Handicap Positivos (+1.5/+2.0) son mercados defensivos (como Doble Oportunidad)
+    // y NO deben pasar por este filtro de 82%. Se evalúan más abajo con umbrales estándar.
+    const isPositiveHandicap = p.market === 'Handicap Asiático' && p.selection.includes('+');
+    if ((p.market === 'Ganador del Partido' || p.market === 'Handicap Asiático') && !isPositiveHandicap) {
       // FILTRO ACL: Si el equipo favorito (el que generó el pick) está en riesgo
       // de rotación por congestión ACL, bloqueamos Ganador/Hándicap sin importar la prob.
       const favorsHome = p.selection.includes('Local') || p.selection.includes('Local');
@@ -2132,15 +2418,10 @@ let filtered = consistentPicks.filter(p => {
         if (favorsHome && homeACL.isAtRisk) return false; // 🚫 Local Big4 en rotación
         if (favorsAway && awayACL.isAtRisk) return false;  // 🚫 Visitante Big4 en rotación
       }
-      // 💎 VALUE BETs bypasan el umbral de probabilidad: el motor detectó que el
-      // mercado está pagando MENOS de lo que la probabilidad real justifica.
-      // En ese caso, el pick tiene valor aunque no supere el 88%.
-      if (p.tier === '💎') return true;
-      // Umbral normal de probabilidad
-      const threshold = isBig4Match ? 82 : 88;
+      // Umbral normal de probabilidad (reducido a 82% para capturar Bankers)
+      const threshold = isBig4Match ? 80 : 82;
       if (p.probability < threshold) return false;
     }
-
 
     // ── MÓDULO AFA (Liga Profesional Argentina) ──────────────────────
     const isAFA = leagueName.toLowerCase().includes('argentina');
@@ -2304,27 +2585,40 @@ let filtered = consistentPicks.filter(p => {
     return p;
   });
 
-  // Ordenar: primero valor/💎 (mayor cuota), luego moderada (mayor prob), luego segura
-  filtered.sort((a, b) => {
-    // 💎 siempre va primero
-    const aIsValue = a.tier === '💎' || a.category === 'valor';
-    const bIsValue = b.tier === '💎' || b.category === 'valor';
-    if (aIsValue && !bIsValue) return -1;
-    if (!aIsValue && bIsValue) return 1;
-    if (aIsValue && bIsValue) return (parseFloat(b.odds) || 0) - (parseFloat(a.odds) || 0);
-    return b.probability - a.probability;
+  // ── Filtro de Cuota Mínima (Boring Odds Filter) ─────────────────
+  // Descartamos picks con cuotas decimales < 1.20 porque no generan valor
+  // real para el usuario (riesgo/recompensa desfavorable).
+  const MIN_ODDS = 1.20;
+  filtered = filtered.filter(p => {
+    const o = parseFloat(p.odds);
+    // Si la cuota no está disponible o es un string como '1.80+', dejamos pasar
+    if (!o || isNaN(o)) return true;
+    return o >= MIN_ODDS;
   });
 
-  // ── Límite: máximo 8 picks — 💎 tier SIEMPRE va a valor ────────
-  const livePicks = filtered.filter(p => p.tier === '🔥');
-  // Un pick con tier 💎 es Value Bet aunque category diga 'segura'
-  const valor     = filtered.filter(p => p.tier !== '🔥' && (p.tier === '💎' || p.category === 'valor'));
-  const moderadas = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'moderada');
-  const seguras   = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'segura');
+  const livePicks   = filtered.filter(p => p.tier === '🔥');
+  // 💎 tier SIEMPRE va a valuePicks, sin importar la categoría del pick
+  const valuePicks  = filtered.filter(p => p.tier !== '🔥' && (p.tier === '💎' || p.category === 'valor'));
+  const moderadas   = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'moderada');
+  const seguras     = filtered.filter(p => p.tier !== '🔥' && p.tier !== '💎' && p.category === 'segura');
+
+  // Ordenar cada grupo internamente
+  // Value Bets: primero las de MAYOR cuota (más emocionante/rentable)
+  const sortedValor = [...valuePicks].sort((a, b) => (parseFloat(b.odds) || 0) - (parseFloat(a.odds) || 0));
+  // Seguras: primero las de mayor probabilidad
+  const sortedSeguras = [...seguras].sort((a, b) => b.probability - a.probability);
+  // Moderadas: primero las de mayor probabilidad
+  const sortedModeradas = [...moderadas].sort((a, b) => b.probability - a.probability);
+
+  // ── Orden de Presentación ─────────────────────────────────────────
+  // 1. 💎 Value Bets (mayor ROI potencial, las más emocionantes)
+  // 2. 🔵 Moderadas  (confiables, cuotas decentes)
+  // 3. 🟢 Seguras    (bankers, bajo riesgo pero cuotas aburridas)
+  // 4. 🔥 En Vivo    (siempre al final como bonus)
   const finalPicks = [
-    ...valor.slice(0, 3),
-    ...moderadas.slice(0, 2),
-    ...seguras.slice(0, 2),
+    ...sortedValor.slice(0, 3),
+    ...sortedModeradas.slice(0, 2),
+    ...sortedSeguras.slice(0, 2),
     ...livePicks.slice(0, 1)
   ];
 

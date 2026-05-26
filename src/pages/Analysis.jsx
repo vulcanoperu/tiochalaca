@@ -54,6 +54,7 @@ export default function Analysis() {
   const [error, setError]             = useState(null);
   const [analysis, setAnalysis]       = useState(null);
   const [picksResult, setPicksResult] = useState(null);
+  const [livePicksResult, setLivePicksResult] = useState(null);
   const [pickSaved, setPickSaved]     = useState(false);
   const [matchStats, setMatchStats]   = useState(null); // estadísticas reales del partido finalizado
 
@@ -147,6 +148,7 @@ export default function Analysis() {
       if (cached) {
         const { ts, fixture: f, homeMatches: hm, awayMatches: am, h2hMatches: h2h,
                 injuries: inj, events: evs, analysis: an, picksResult: pr,
+                livePicksResult: lpr,
                 isLiveMatch: ilm, elapsedSec } = JSON.parse(cached);
         
         // Determinar TTL correcto según el estado
@@ -160,7 +162,7 @@ export default function Analysis() {
         }
 
         if (Date.now() - ts < ttl) {
-          setFixture(f); setHomeMatches(hm); setAwayMatches(am); setH2HMatches(h2h);
+          setFixture(f); setHomeMatches(hm); setAwayMatches(am); setH2HMatches(h2h); setLivePicksResult(lpr || null);
           setInjuries(inj); setEvents(evs); setAnalysis(an); setPicksResult(pr);
           if (elapsedSec !== undefined && elapsedSec !== null) {
             baseRef.current = { serverSec: elapsedSec, startedAt: Date.now() };
@@ -275,10 +277,12 @@ export default function Analysis() {
       setPrediction(null);
 
       // ── 3. Motor de análisis (pura matemática, sin llamadas de red) ────────
-      const homeForm       = calculateFormScore(hm, homeId);
-      const awayForm       = calculateFormScore(am, awayId);
-      const homeFormAtHome = calculateFormScore(hm, homeId, 'home');
-      const awayFormAway   = calculateFormScore(am, awayId, 'away');
+      // Copa Mode: detectar si es partido de Copa para ponderación especial (3x peso a partidos coperos)
+      const isCupMatch = /cup|copa|taça|pokal|coppa|libertadores|sudamericana|conmebol|champions|europa|conference/i.test(fix.league?.name || '');
+      const homeForm       = calculateFormScore(hm, homeId, null, isCupMatch);
+      const awayForm       = calculateFormScore(am, awayId, null, isCupMatch);
+      const homeFormAtHome = calculateFormScore(hm, homeId, 'home', isCupMatch);
+      const awayFormAway   = calculateFormScore(am, awayId, 'away', isCupMatch);
       const homeSplit      = calculateOverUnder(hm, homeId);
       const awaySplit      = calculateOverUnder(am, awayId);
       const h2hData        = analyzeH2H(h2h, homeId, awayId);
@@ -305,11 +309,11 @@ export default function Analysis() {
         return Math.floor((Date.now() - new Date(lastDate).getTime()) / 86_400_000);
       };
 
-      const picksRes = generatePicks({
+      // ── PASO A: Picks PRE-MATCH (siempre, persisten aunque el partido esté en vivo) ──
+      const engineBaseArgs = {
         homeStats: null, awayStats: null,
         h2hData, homeForm, awayForm,
         homeSplitStats: homeSplit, awaySplitStats: awaySplit,
-        isLive, liveClock, liveHomeGoals, liveAwayGoals,
         marketInsight:   ad.marketInsight,
         homeCornersData: ad.homeCornersData,
         awayCornersData: ad.awayCornersData,
@@ -331,7 +335,27 @@ export default function Analysis() {
         matchStandings: ad.matchStandings,
         advancedStats:  ad.advancedStats,
         refereeStats:   ad.refereeStats,
+      };
+
+      const picksRes = generatePicks({
+        ...engineBaseArgs,
+        isLive: false,
+        liveClock: "0'",
+        liveHomeGoals: 0,
+        liveAwayGoals: 0,
       });
+
+      // ── PASO B: Picks EN VIVO (solo si el partido está en curso) ──
+      let liveRes = null;
+      if (isLive) {
+        liveRes = generatePicks({
+          ...engineBaseArgs,
+          isLive: true,
+          liveClock,
+          liveHomeGoals,
+          liveAwayGoals,
+        });
+      }
 
       const analysisObj = {
         homeForm, awayForm, homeFormAtHome, awayFormAway,
@@ -345,10 +369,11 @@ export default function Analysis() {
       };
       setAnalysis(analysisObj);
       setPicksResult(picksRes);
+      setLivePicksResult(liveRes);
 
       // Auditar y enviar picks en vivo al servidor (si existen)
-      if (isLive && picksRes && picksRes.picks?.length > 0) {
-        const livePicks = picksRes.picks.filter(p => p.market?.toLowerCase()?.includes('vivo') || p.tier === '🔥');
+      if (isLive && liveRes && liveRes.picks?.length > 0) {
+        const livePicks = liveRes.picks.filter(p => p.market?.toLowerCase()?.includes('vivo') || p.tier === '🔥');
         const newAlerts = [];
         livePicks.forEach(pick => {
            const alertId = `${fixtureId}_${pick.selection}`;
@@ -388,6 +413,7 @@ export default function Analysis() {
           events: ad.currentEvents,
           analysis: analysisObj,
           picksResult: picksRes,
+          livePicksResult: liveRes,
           isLiveMatch: isLive,
           elapsedSec: parsed.elapsedSec,
         }));
@@ -403,6 +429,23 @@ export default function Analysis() {
   }, [fixtureId]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Si el partido no tiene picks de "Alto Valor", cambiamos de pestaña automáticamente
+  useEffect(() => {
+    if (picksResult?.picks?.length > 0) {
+      const isRealValueBet = (p) => {
+        const odds = parseFloat(p.odds) || 0;
+        if (p.tier === '💎' && odds > 0 && odds < 1.50 && p.probability >= 78) return false;
+        return p.category === 'valor' || p.tier === '💎';
+      };
+      const altoValorCount = picksResult.picks.filter(p => isRealValueBet(p) || (!isRealValueBet(p) && (parseFloat(p.odds) || 0) >= 1.50)).length;
+      const segurasCount = picksResult.picks.filter(p => !isRealValueBet(p) && (parseFloat(p.odds) || 0) < 1.50).length;
+      if (altoValorCount === 0 && segurasCount > 0) {
+        setActiveRiskTab('seguras');
+      }
+    }
+  }, [picksResult]);
+
 
   // ── Reseed clock on each poll ───────────────────────────────────────────
   const pollLiveStatus = useCallback(async () => {
@@ -608,8 +651,9 @@ export default function Analysis() {
       {/* ════════════════════════════════════════════════════════════════════
            PICKS AGRUPADOS (Senior-friendly)
          ════════════════════════════════════════════════════════════════════ */}
-      {!showPro && !loadingAnalysis && picksResult?.picks?.length > 0 && (() => {
-        const allPicks = [...picksResult.picks];
+      {!showPro && !loadingAnalysis && (picksResult?.picks?.length > 0 || livePicksResult?.picks?.length > 0) && (() => {
+        const allPicks = [...(picksResult?.picks || [])];
+        const livePicks = [...(livePicksResult?.picks || [])];
         
         const sortByOddsAndProb = (a, b) => {
           const oddsA = parseFloat(a.odds) || 0;
@@ -640,12 +684,23 @@ export default function Analysis() {
           .filter(p => !isRealValueBet(p) && (parseFloat(p.odds) || 0) < 1.50)
           .sort((a, b) => (b.probability || 0) - (a.probability || 0));
 
+        // Tab 3: "Apuestas en Vivo" — picks generados según el momento del partido
+        const livePicksSorted = livePicks.sort(sortByOddsAndProb);
+
         const tabs = [
           { key: 'altoValor', label: '🔥 Alto Valor', count: altoValor.length },
           { key: 'seguras', label: '🛡️ Más Seguras', count: seguras.length },
         ];
-        const activePicks = activeRiskTab === 'altoValor' ? altoValor : seguras;
+        // Solo mostrar la pestaña de En Vivo si hay picks en vivo
+        if (livePicksSorted.length > 0) {
+          tabs.push({ key: 'enVivo', label: '🔴 En Vivo', count: livePicksSorted.length });
+        }
+
+        const activePicks = activeRiskTab === 'enVivo' ? livePicksSorted
+                          : activeRiskTab === 'seguras' ? seguras
+                          : altoValor;
         const isAltoValor = activeRiskTab === 'altoValor';
+        const isEnVivo = activeRiskTab === 'enVivo';
 
         return (
           <div className="mt-4 space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -657,38 +712,71 @@ export default function Analysis() {
                     activeRiskTab === tab.key
                       ? tab.key === 'altoValor'
                         ? 'bg-amber-500 text-black shadow-lg shadow-yellow-500/20'
-                        : 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20'
+                        : tab.key === 'enVivo'
+                          ? 'bg-red-500 text-white shadow-lg shadow-red-500/30'
+                          : 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20'
                       : 'bg-surface-800 border border-white/10 text-slate-400 hover:text-white'
                   }`}>
+                  {tab.key === 'enVivo' && activeRiskTab !== 'enVivo' && (
+                    <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse mr-2 align-middle" />
+                  )}
                   {tab.label} ({tab.count})
                 </button>
               ))}
             </div>
 
+            {/* Aviso de contexto en vivo */}
+            {isEnVivo && (
+              <div className="flex items-center gap-3 px-5 py-3 rounded-2xl bg-red-500/10 border border-red-500/20">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                <p className="text-sm text-red-300 font-semibold">
+                  Estas apuestas fueron generadas según el marcador y minuto actual del partido. Las cuotas cambian rápidamente en vivo.
+                </p>
+              </div>
+            )}
+
             {/* Cards list — Senior-friendly (1 column on mobile, 2 on desktop, flexible height) */}
             {activePicks.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-                {activePicks.map((pick, i) => (
-                  <div key={`pick-${i}`}>
-                    {/* Separador entre value bets y high-odds picks */}
-                    {isAltoValor && i === valueBets.length && valueBets.length > 0 && (
-                      <div className="flex items-center gap-4 px-2 py-3 mb-2">
-                        <span className="text-sm font-bold text-yellow-400/80">⚡ Cuotas Atractivas</span>
-                        <div className="flex-1 h-px bg-yellow-400/20" />
-                      </div>
-                    )}
-                    
-                    <div className={`rounded-3xl p-8 sm:p-10 flex flex-col gap-6 border transition-all cursor-default ${
-                        isAltoValor
-                          ? 'bg-surface-900/60 border-yellow-500/20'
-                          : 'bg-surface-900/60 border-emerald-500/20'
-                      }`}
-                    >
-                      {/* Top: Cuota y Probabilidad grandes */}
-                      <div className="flex justify-between items-center bg-black/10 p-4 rounded-2xl border border-white/5">
+                {activePicks.map((pick, i) => {
+                  const pickOdds = parseFloat(pick.odds) || 0;
+                  const isSniperBanker = pick.tier === '💎' && pickOdds > 0 && pickOdds < 1.50 && pick.probability >= 78;
+                  const isValue = !isSniperBanker && (isRealValueBet(pick) || pick.category === 'valor' || pick.tier === '💎');
+
+                  const cardBorderColor = isEnVivo ? 'border-red-500/20' : isAltoValor ? 'border-yellow-500/20' : 'border-emerald-500/20';
+                  const cardAccent = isEnVivo ? 'text-red-400' : isAltoValor ? 'text-yellow-400' : 'text-emerald-400';
+                  const cardBgAccent = isEnVivo ? 'bg-red-500/10 border-red-500/20' : isAltoValor
+                    ? isValue ? 'bg-yellow-500/10 border-yellow-500/20' : 'bg-amber-500/10 border-amber-500/20'
+                    : 'bg-emerald-500/10 border-emerald-500/20';
+                  const cardTextAccent = isEnVivo ? 'text-red-400' : isAltoValor
+                    ? isValue ? 'text-yellow-400' : 'text-amber-400'
+                    : 'text-emerald-400';
+                  const cardBtnClass = isEnVivo
+                    ? 'bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white border border-red-500/30'
+                    : isAltoValor
+                      ? 'bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500 hover:text-black border border-yellow-500/30'
+                      : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/30';
+
+                  return (
+                    <div key={`pick-${activeRiskTab}-${i}`}>
+                      <div className={`rounded-3xl p-8 sm:p-10 flex flex-col gap-6 border transition-all cursor-default bg-surface-900/60 ${cardBorderColor}`}>
+                        {/* Categorización de la Selección */}
+                        <div className="flex items-center">
+                          <span className={`text-[11px] px-3.5 py-1.5 rounded-full font-black tracking-wider border uppercase ${cardBgAccent} ${cardTextAccent}`}>
+                            {isEnVivo
+                              ? '🔴 Apuesta en Vivo'
+                              : isAltoValor
+                                ? isValue ? '💎 Selección de Valor' : '⚡ Cuota Atractiva'
+                                : '🛡️ Apuesta Segura'
+                            }
+                          </span>
+                        </div>
+
+                        {/* Top: Cuota y Probabilidad grandes */}
+                        <div className="flex justify-between items-center bg-black/10 p-4 rounded-2xl border border-white/5">
                         <div className="flex flex-col">
                           <span className="text-sm text-slate-500 font-bold mb-1">Cuota</span>
-                          <span className={`text-5xl font-black tracking-tight ${isAltoValor ? 'text-yellow-400' : 'text-emerald-400'}`}>
+                          <span className={`text-5xl font-black tracking-tight ${cardAccent}`}>
                             {pick.odds || '—'}
                           </span>
                         </div>
@@ -721,27 +809,45 @@ export default function Analysis() {
                         }`}>Riesgo: {pick.risk}</span>
                         
                         <button onClick={() => saveIndividualPick(pick)}
-                          className={`flex-1 sm:flex-none px-6 py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-2 transition-all ${
-                            isAltoValor
-                              ? 'bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500 hover:text-black border border-yellow-500/30'
-                              : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-black border border-emerald-500/30'
-                          }`}>
+                          className={`flex-1 sm:flex-none px-6 py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-2 transition-all ${cardBtnClass}`}>
                           <CheckCircle2 size={20} />
                           Guardar Apuesta
                         </button>
                       </div>
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             ) : (
               <div className="text-center py-10 rounded-2xl bg-surface-900 border border-white/10">
-                <p className="text-lg text-slate-400">No hay apuestas en esta categoría para este partido.</p>
+                <p className="text-lg text-slate-400">
+                  {isEnVivo
+                    ? "No hay apuestas en vivo disponibles en este momento. Las picks se generan según el minuto y marcador actual."
+                    : isAltoValor 
+                      ? "No hay picks de Alto Valor para este partido. Por favor revisa la pestaña de 'Más Seguras'."
+                      : "No hay apuestas en esta categoría para este partido."
+                  }
+                </p>
               </div>
             )}
           </div>
         );
       })()}
+
+      {!showPro && !loadingAnalysis && (!picksResult || !picksResult.picks || picksResult.picks.length === 0) && (
+        <div className="text-center py-12 px-6 rounded-3xl bg-surface-900/60 border border-white/5 shadow-2xl flex flex-col items-center justify-center gap-4">
+          <div className="w-16 h-16 rounded-full bg-slate-800/80 flex items-center justify-center border border-white/10 text-slate-400">
+            <AlertCircle size={28} />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-bold text-white">Sin Recomendaciones Activas</h3>
+            <p className="text-slate-400 max-w-md mx-auto text-sm leading-relaxed">
+              {picksResult?.reason || "El motor de análisis se ha reservado de emitir recomendaciones para este encuentro debido a alta paridad deportiva o fluctuación inestable de cuotas."}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ════════════════════════════════════════════════════════════════════
            TIER 2 — MODO PROFESIONAL (colapsable)

@@ -312,6 +312,61 @@ const HIERARCHY_TEAMS = [
   'gremio', 'grêmio', 'internacional', 'fluminense', 'botafogo', 'cruzeiro'
 ];
 
+// Nuevos Filtros Élite Conmebol
+const BRAZILIAN_TOP_TEAMS = [
+  'flamengo', 'palmeiras', 'atletico mg', 'atlético mg', 'atletico mineiro',
+  'sao paulo', 'são paulo', 'fluminense', 'botafogo', 'cruzeiro', 'internacional', 'gremio', 'grêmio'
+];
+
+const TROPICAL_OVEN_CITIES = [
+  'barranquilla', 'maracaibo', 'guayaquil', 'fortaleza', 'cuiaba', 'cuiabá',
+  'manaus', 'belem', 'belém', 'sullana', 'piura', 'tarapoto'
+];
+
+const SOUTH_COLD_TEAMS = [
+  'river plate', 'boca juniors', 'racing', 'independiente', 'san lorenzo', 'estudiantes', 'velez', 'vélez',
+  'peñarol', 'nacional montevideo', 'colo colo', 'universidad de chile', 'universidad católica'
+];
+
+const NORTH_CITIES = [
+  'caracas', 'san cristobal', 'san cristóbal', 'barranquilla', 'medellin', 'medellín', 'bogota', 'bogotá',
+  'cali', 'guayaquil', 'quito'
+];
+
+const SOUTH_CITIES = [
+  'buenos aires', 'montevideo', 'santiago', 'porto alegre', 'curitiba', 'rosario', 'mendoza', 'cordoba', 'córdoba'
+];
+
+function checkConmebolTravelAndClimateRisk(awayTeamName, homeCity) {
+  if (!homeCity || !awayTeamName) return null;
+  const cityLow = homeCity.toLowerCase();
+  const awayLow = awayTeamName.toLowerCase();
+  
+  // 1. Horno Tropical
+  const isTropicalOven = TROPICAL_OVEN_CITIES.some(c => cityLow.includes(c));
+  const isSouthColdTeam = SOUTH_COLD_TEAMS.some(t => awayLow.includes(t));
+  
+  if (isTropicalOven && isSouthColdTeam) {
+    return 'climate_heat';
+  }
+
+  // 2. Fatiga de Viaje Extremo
+  const isHomeNorth = NORTH_CITIES.some(c => cityLow.includes(c));
+  const isHomeSouth = SOUTH_CITIES.some(c => cityLow.includes(c));
+  
+  if (isHomeNorth && isSouthColdTeam) {
+    return 'travel_fatigue';
+  }
+  
+  const NORTH_TEAMS = ['millonarios', 'santa fe', 'nacional', 'junior', 'caracas', 'tachira', 'táchira', 'emelec', 'barcelona', 'ldu'];
+  const isAwayNorth = NORTH_TEAMS.some(t => awayLow.includes(t));
+  if (isHomeSouth && isAwayNorth) {
+    return 'travel_fatigue';
+  }
+
+  return null;
+}
+
 function checkCalendarFatigue(history) {
   if (!history || history.length < 3) return false;
   // Consideramos fatiga si ha jugado 3 partidos en los últimos 8 días
@@ -479,6 +534,11 @@ export function generatePicks({
   const homeTotal = homeForm.total || 0;
   const awayTotal = awayForm.total || 0;
   
+  const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
+  const isCupMatch = /cup|copa|taça|pokal|coppa|friendl|libertadores|sudamericana|conmebol/i.test(leagueName);
+  const isConmebolCup = /libertadores|sudamericana|conmebol/i.test(leagueName);
+  const isSudamericana = /sudamericana/i.test(leagueName);
+  
   if (!isLive && (homeTotal < minMatches || awayTotal < minMatches)) {
     const minTeam = homeTotal < awayTotal ? `Local (${homeTotal} PJ)` : `Visitante (${awayTotal} PJ)`;
     return { 
@@ -487,9 +547,6 @@ export function generatePicks({
     };
   }
 
-  const isDerby = isDerbyMatch(homeTeamName, awayTeamName);
-  const isCupMatch = /cup|copa|taça|pokal|coppa|friendl/i.test(leagueName);
-  const isSudamericana = /sudamericana/i.test(leagueName);
   const isDefensiveLeague = /serie a|primeira liga|portugal|italia/i.test(leagueName);
   // ── Liga 1 Perú: Ajuste Especial ─────────────────────────────
   const isLiga1Peru = /liga 1|liga1|peru|perú/i.test(leagueName);
@@ -517,7 +574,8 @@ export function generatePicks({
   // ── #0: Nuevos Factores de Prevención (Fatiga y Altitud) ──────────
   const homeFatigue = checkCalendarFatigue(homeHistory);
   const awayFatigue = checkCalendarFatigue(awayHistory);
-  const altitudeRisk = checkAltitudeRisk(awayTeamName, city, homeTeamName);
+  const altitudeRisk = checkAltitudeRisk(awayTeamName, city, homeTeamName, isCupMatch);
+  const conmebolTravelClimate = isConmebolCup ? checkConmebolTravelAndClimateRisk(awayTeamName, city) : null;
 
   // AJUSTE #1: Resaca Internacional (copas continentales recientes)
   const homeHangover = checkInternationalHangover(homeTeamName, homeHistory);
@@ -554,6 +612,7 @@ export function generatePicks({
   // Penalización por altitud escalonada según origen del visitante
   let altitudePenalty = altitudeRisk === 'high' ? (28 - altitudeSoftening) // Costeño en altura → penalización máxima (suavizada si alta posesión)
                       : altitudeRisk === 'medium' ? 18 // Jerarquía foránea en altura
+                      : altitudeRisk === 'extreme' ? 45 // Altura extrema
                       : 0;
 
   const homeAvgGF = homeForm.total > 0 ? +(homeForm.goalsFor  / homeForm.total).toFixed(2) : 0;
@@ -852,6 +911,75 @@ export function generatePicks({
     isCupMatch,
     leagueName,
   });
+  
+  // ── Normalización de probabilidades
+  let adjHomeProb = eloCombined.home;
+  let adjAwayProb = eloCombined.away;
+  let adjDrawProb = eloCombined.draw;
+  let totalAdj = adjHomeProb + adjDrawProb + adjAwayProb;
+  adjHomeProb = Math.round((adjHomeProb / totalAdj) * 100);
+  adjAwayProb = Math.round((adjAwayProb / totalAdj) * 100);
+  adjDrawProb = 100 - adjHomeProb - adjAwayProb;
+
+  // ── Altitud Extrema (Ex. La Paz, Juliaca, Cusco)
+  if (altitudeRisk === 'extreme') {
+    adjAwayProb *= 0.65;
+    adjDrawProb *= 1.15;
+    adjHomeProb = Math.min(adjHomeProb * 1.35, 95);
+  }
+
+  // ── Brazilian Boost (Supremacía Económica)
+  let homeIsBrazTop = false, awayIsBrazTop = false;
+  if (isConmebolCup) {
+    homeIsBrazTop = BRAZILIAN_TOP_TEAMS.some(t => homeTeamName.toLowerCase().includes(t));
+    awayIsBrazTop = BRAZILIAN_TOP_TEAMS.some(t => awayTeamName.toLowerCase().includes(t));
+    
+    const isHomeSouthCold = SOUTH_COLD_TEAMS.some(t => homeTeamName.toLowerCase().includes(t));
+    const isAwaySouthCold = SOUTH_COLD_TEAMS.some(t => awayTeamName.toLowerCase().includes(t));
+
+    if (homeIsBrazTop && !awayIsBrazTop && !isAwaySouthCold) {
+      adjHomeProb *= 1.12; 
+      adjAwayProb *= 0.85; 
+    } else if (awayIsBrazTop && !homeIsBrazTop && !isHomeSouthCold && altitudeRisk !== 'high' && altitudeRisk !== 'extreme') {
+      adjAwayProb *= 1.08;
+      adjHomeProb *= 0.90;
+    }
+  }
+
+  // ── Riesgo de Rotación (Fase de Grupos - Fecha 5 o 6)
+  let isDeadRubberRotation = false;
+  let rotationTarget = null;
+  if (isConmebolCup && matchStandings && matchStandings.total === 4) {
+    const hr = matchStandings.homeRank;
+    const ar = matchStandings.awayRank;
+    if (hr === 1 && homeForm.score > 85) {
+      isDeadRubberRotation = true;
+      rotationTarget = 'home';
+      adjHomeProb *= 0.85;
+      adjDrawProb *= 1.15;
+    } else if (ar === 1 && awayForm.score > 85) {
+      isDeadRubberRotation = true;
+      rotationTarget = 'away';
+      adjAwayProb *= 0.85;
+      adjDrawProb *= 1.15;
+    }
+  }
+
+  // ── Clima Extremo Conmebol
+  if (conmebolTravelClimate === 'climate_heat') {
+    adjAwayProb *= 0.93; 
+    adjHomeProb *= 1.05;
+  } else if (conmebolTravelClimate === 'travel_fatigue') {
+    adjAwayProb *= 0.96;
+    adjHomeProb *= 1.02;
+  }
+
+  // Renormalizar tras los factores Élite
+  totalAdj = adjHomeProb + adjDrawProb + adjAwayProb;
+  adjHomeProb = Math.round((adjHomeProb / totalAdj) * 100);
+  adjAwayProb = Math.round((adjAwayProb / totalAdj) * 100);
+  adjDrawProb = 100 - adjHomeProb - adjAwayProb;
+  
   // Cada 50 pts de diferencia Elo = 1 punto de efectividad (cap ±10)
   const eloAdj = Math.min(Math.max(Math.round(eloCombined._elo.eloDiff / 50), -10), 10);
   const eloLabel = `Elo: ${eloCombined._elo.homeElo} vs ${eloCombined._elo.awayElo} (Δ${eloCombined._elo.eloDiff >= 0 ? '+' : ''}${eloCombined._elo.eloDiff})`;
@@ -951,7 +1079,7 @@ export function generatePicks({
       homeEffectiveScore = Math.max(homeEffectiveScore, 58); // Piso reducido: defensa porosa detectada
     }
   }
-  if (isAwayHierarchy && altitudeRisk !== 'high') {
+  if (isAwayHierarchy && altitudeRisk !== 'high' && altitudeRisk !== 'extreme') {
     awayEffectiveScore = Math.max(awayEffectiveScore, 60); // Piso de jerarquía de visita (si no hay altura extrema)
   }
 
@@ -1912,17 +2040,9 @@ export function generatePicks({
         argument: `El local es superior. Si el visitante anota primero de forma inesperada, apostar a la remontada o empate (1X) local tendrá mucho valor.`,
         risk: 'Alto'
       });
-    } else {
-       addPick({
-        market: 'Estrategia en Vivo',
-        selection: 'Gol en el 2do Tiempo',
-        probability: 75,
-        odds: '1.50',
-        tier: '🔥',
-        argument: `Si el partido llega empatado al descanso (especialmente 0-0), apostar a que habrá más de 0.5 goles en el segundo tiempo.`,
-        risk: 'Moderado'
-      });
     }
+    // NOTA: Se eliminó el bloque 'else' genérico que agregaba 'Gol en el 2do Tiempo'
+    // con cuota 1.50 a TODOS los demás partidos, causando una sobrepoblación de esta cuota.
   }
 
   // ── Corners del partido (ambos equipos) ────────────────────────

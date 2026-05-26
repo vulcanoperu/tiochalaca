@@ -237,14 +237,17 @@ export default function HomePage() {
           return Math.floor((Date.now() - new Date(lastDate).getTime()) / 86_400_000);
         };
 
+        // SIEMPRE ejecutar el motor en modo PRE-MATCH para el Home.
+        // Las picks pre-match deben persistir aunque el partido ya esté en vivo.
+        // Las picks en vivo se muestran en la página de Análisis detallado.
         const picksRes = generatePicks({
           homeStats: null, awayStats: null,
           h2hData, homeForm, awayForm,
           homeSplitStats: homeSplit, awaySplitStats: awaySplit,
-          isLive: ['1H', '2H', 'HT', 'ET', 'P'].includes(fixture.fixture?.status?.short),
-          liveClock: fixture.fixture?.status?.elapsed ? String(fixture.fixture.status.elapsed) + "'" : "0'",
-          liveHomeGoals: parseInt(fixture.goals?.home ?? 0),
-          liveAwayGoals: parseInt(fixture.goals?.away ?? 0),
+          isLive: false,
+          liveClock: "0'",
+          liveHomeGoals: 0,
+          liveAwayGoals: 0,
           marketInsight: ad.marketInsight,
           homeCornersData: ad.homeCornersData,
           awayCornersData: ad.awayCornersData,
