@@ -49,6 +49,10 @@ function Divider() {
 
 // ── Componente principal ─────────────────────────────────────────────
 export default function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [pass, setPass]         = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError]       = useState('');
   const [loading, setLoading]   = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   
@@ -91,9 +95,25 @@ export default function LoginPage({ onLogin }) {
     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
 
+    if (!username.trim() || !pass.trim()) {
+      setError('Por favor, completa todos los campos.');
+      return;
+    }
 
-  const handleGoogleLogin = async () => {
+    setLoading(true);
+    const res = await loginUser(username, pass);
+    if (res?.success) {
+      toast.success('¡Bienvenido!');
+      onLogin();
+    } else {
+      setError('El usuario o la contraseña no son correctos.');
+    }
+    setLoading(false);
+  };  const handleGoogleLogin = async () => {
     setGoogleLoading(true);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -288,6 +308,63 @@ export default function LoginPage({ onLogin }) {
 
             <div className="bg-white/[0.03] backdrop-blur-2xl border border-white/10 p-8 md:p-10 rounded-[2rem] shadow-2xl">
               <GoogleButton onClick={handleGoogleLogin} loading={googleLoading} />
+
+              <Divider />
+
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-base font-semibold text-white/70 ml-2">Tu Nombre de Usuario</label>
+                  <div className="relative">
+                    <User size={20} className="absolute left-5 top-1/2 -translate-y-1/2 text-white/40" />
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={e => { setUsername(e.target.value); setError(''); }}
+                      placeholder="Escribe tu nombre"
+                      className="w-full bg-white/5 border border-white/10 rounded-[1.2rem] pl-12 pr-5 py-4 text-lg text-white placeholder-white/30 focus:border-accent-green focus:bg-white/10 outline-none transition-all focus:shadow-[0_0_15px_rgba(0,255,136,0.1)]"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-base font-semibold text-white/70 ml-2">Contraseña</label>
+                  <div className="relative">
+                    <Lock size={20} className="absolute left-5 top-1/2 -translate-y-1/2 text-white/40" />
+                    <input
+                      type={showPass ? 'text' : 'password'}
+                      value={pass}
+                      onChange={e => { setPass(e.target.value); setError(''); }}
+                      placeholder="••••••••"
+                      className="w-full bg-white/5 border border-white/10 rounded-[1.2rem] pl-12 pr-12 py-4 text-lg text-white placeholder-white/30 focus:border-accent-green focus:bg-white/10 outline-none transition-all focus:shadow-[0_0_15px_rgba(0,255,136,0.1)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPass(!showPass)}
+                      className="absolute right-5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white transition-colors"
+                    >
+                      {showPass ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </button>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-center gap-3 mt-4">
+                    <AlertCircle size={24} className="text-red-400 shrink-0" />
+                    <p className="text-red-400 font-medium text-base">{error}</p>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading || googleLoading}
+                  className="w-full relative group py-4 rounded-[1.2rem] text-xl font-bold transition-all mt-6 overflow-hidden shadow-[0_0_20px_rgba(0,255,136,0.2)] hover:shadow-[0_0_30px_rgba(0,255,136,0.4)]"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-accent-green to-teal-400 group-hover:scale-105 transition-transform duration-500" />
+                  <span className="relative z-10 text-black">
+                    {loading ? 'Cargando...' : 'Ingresar'}
+                  </span>
+                </button>
+              </form>
             </div>
           </div>
         </section>
