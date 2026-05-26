@@ -1645,7 +1645,7 @@ export function generatePicks({
     }
   }
 
-  if (homeEffectiveScore >= 58 && awayEffectiveScore <= 52 && effectiveAdv >= 12) {
+  if (!isLive && homeEffectiveScore >= 58 && awayEffectiveScore <= 52 && effectiveAdv >= 12) {
     let prob = Math.min(Math.round(homeEffectiveScore * 0.6 + (h2hData?.homeWinPct ?? 50) * 0.4) + officialHomeBoost + survivalBoostHomeWin, 86);
     if (prob >= 60) {
       const splitNote = homeFormAtHome?.total >= 3 ? ` (Casa: ${homeFormAtHome.wins}G/${homeFormAtHome.total}PJ)` : '';
@@ -1662,7 +1662,7 @@ export function generatePicks({
   }
 
   // ── Ganador: Visitante ─────────────────────────────────────────
-  if (awayEffectiveScore >= 58 && homeEffectiveScore <= 52 && -effectiveAdv >= 12) {
+  if (!isLive && awayEffectiveScore >= 58 && homeEffectiveScore <= 52 && -effectiveAdv >= 12) {
     let prob = Math.min(Math.round(awayEffectiveScore * 0.6 + (h2hData?.awayWinPct ?? 50) * 0.4) + officialAwayBoost + survivalBoostAwayWin, 86);
     if (prob >= 60) {
       const splitNote = awayFormAway?.total >= 3 ? ` (Fuera: ${awayFormAway.wins}G/${awayFormAway.total}PJ)` : '';
@@ -1679,7 +1679,7 @@ export function generatePicks({
   }
 
   // ── Handicap Asiático -0.5 (Local favorito claro) ──────────────
-  if (homeForm.score >= 65 && homeScoreAdv >= 18 && (h2hData?.homeWinPct ?? 0) >= 40) {
+  if (!isLive && homeForm.score >= 65 && homeScoreAdv >= 18 && (h2hData?.homeWinPct ?? 0) >= 40) {
     const prob = Math.min(Math.round(homeForm.score * 0.55 + (h2hData?.homeWinPct ?? 50) * 0.35 + officialHomeWinPct * 0.1), 85);
     if (prob >= 55) {
       addPick({
@@ -1695,7 +1695,7 @@ export function generatePicks({
   }
 
   // ── Handicap Asiático -0.5 (Visitante favorito claro) ──────────
-  if (awayForm.score >= 65 && -homeScoreAdv >= 18 && (h2hData?.awayWinPct ?? 0) >= 40) {
+  if (!isLive && awayForm.score >= 65 && -homeScoreAdv >= 18 && (h2hData?.awayWinPct ?? 0) >= 40) {
     const prob = Math.min(Math.round(awayForm.score * 0.55 + (h2hData?.awayWinPct ?? 50) * 0.35 + officialAwayWinPct * 0.1), 85);
     if (prob >= 55) {
       addPick({
