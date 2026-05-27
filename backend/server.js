@@ -269,69 +269,6 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
 });
 
 
-  try {
-    // Timeout de 3s por liga: si ESPN tarda más, descartamos esa liga pero
-    // respondemos con las demás (no bloqueamos toda la respuesta)
-    const requestsWithSlug = Object.keys(ALLOWED_LEAGUES).map(l =>
-      axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 5000 })
-        .then(res => ({ slug: l, data: res.data }))
-    );
-    const resultsWithSlug = await Promise.allSettled(requestsWithSlug);
-
-    let allFixtures = [];
-    let hasLiveMatches = false;
-
-    for (const r of resultsWithSlug) {
-      if (r.status !== 'fulfilled' || !r.value.data.events) continue;
-      const { slug, data } = r.value;
-      const leagueInfo = data.leagues?.[0];
-      data.events.forEach(e => {
-        const comp = e.competitions?.[0];
-        const home = comp?.competitors?.find(c => c.homeAway === 'home');
-        const away = comp?.competitors?.find(c => c.homeAway === 'away');
-        const statusObj = comp?.status || e.status;
-        const state  = statusObj?.type?.state;
-        const getScore = c => {
-          if (!c) return null;
-          if (c.score?.value !== undefined) return parseInt(c.score.value);
-          if (c.score !== undefined) return parseInt(c.score);
-          return null;
-        };
-        let statusShort = 'NS';
-        if (state === 'post') statusShort = 'FT';
-        else if (state === 'in') {
-          const p = statusObj?.period;
-          statusShort = p === 1 ? '1H' : p === 2 ? '2H' : 'HT';
-          hasLiveMatches = true;
-        }
-
-        const fixture = {
-          fixture: { id: e.id, date: e.date, status: { short: statusShort, elapsed: statusObj?.clock ? Math.floor(statusObj.clock / 60) : 0 } },
-          league:  {
-            id:      slug,
-            name:    ALLOWED_LEAGUES[slug],
-            logo:    leagueInfo?.logos?.[0]?.href || '',
-            country: leagueInfo?.shortName || '',
-          },
-          teams: {
-            home: { id: home?.id, name: home?.team?.displayName || home?.team?.name, logo: home?.team?.logo },
-            away: { id: away?.id, name: away?.team?.displayName || away?.team?.name, logo: away?.team?.logo },
-          },
-          goals: { home: getScore(home), away: getScore(away) },
-        };
-        allFixtures.push(fixture);
-      });
-    }
-
-    // Si hay partidos en vivo, TTL de 2 min para mantener scores frescos
-    const finalTtl = hasLiveMatches ? 2 : ttlBase;
-    cacheSet(cacheKey, allFixtures, finalTtl);
-    return res.json({ source: 'espn', fromCache: false, data: allFixtures });
-  } catch (err) {
-    return res.status(500).json({ error: 'Error obteniendo partidos por fecha', details: err.message });
-  }
-});
-
 // El endpoint anterior /api/espn/summary/:id ha sido consolidado 
 // con /api/espn/summary/:eventId (linea 101) que ya usa getMatchSummary con caché.
 
