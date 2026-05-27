@@ -1445,13 +1445,13 @@ app.get('/api/stats/audit', async (req, res) => {
           espnTotalFinished = espnChecks.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value : 0), 0);
         } catch (_) {}
 
-        // Usar el caché solo si tiene tantos (o más) partidos como ESPN reporta ahora
-        const cachedMatchCount = cached.data.rawFixturesCount || cached.data.totalMatches || 0;
-        if (espnTotalFinished <= cachedMatchCount) {
-          logger.info('audit', `Caché válido para ${date}: ${cachedMatchCount} partidos cacheados vs ${espnTotalFinished} ESPN`);
+        // Usar el caché solo si tiene tantos (o más) partidos ANALIZADOS como ESPN reporta terminados ahora
+        const cachedAnalyzedCount = cached.data.totalMatches || 0;
+        if (espnTotalFinished <= cachedAnalyzedCount) {
+          logger.info('audit', `Caché válido para ${date}: ${cachedAnalyzedCount} partidos cacheados vs ${espnTotalFinished} ESPN terminados`);
           return res.json({ success: true, fromCache: true, data: cached.data });
         } else {
-          logger.info('audit', `Caché OBSOLETO para ${date}: ${cachedMatchCount} cacheados vs ${espnTotalFinished} ESPN → recalculando`);
+          logger.info('audit', `Caché OBSOLETO para ${date}: ${cachedAnalyzedCount} cacheados vs ${espnTotalFinished} ESPN terminados → recalculando`);
         }
       }
     } catch (_) {}
