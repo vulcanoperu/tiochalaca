@@ -125,13 +125,17 @@ function CustomDatePicker({ value, onChange, maxDate }) {
 export default function StatsPage() {
   const [auditData, setAuditData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [expandedMatch, setExpandedMatch] = useState(null);
   
   const getYesterdayStr = () => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 10);
+    // Usar formato local sin manipulación de timezone
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   };
   const [selectedDate, setSelectedDate] = useState(getYesterdayStr());
 
@@ -139,16 +143,23 @@ export default function StatsPage() {
     async function fetchAudit() {
       setLoading(true);
       setAuditData(null);
+      setError(null);
       setExpandedMatch(null);
       try {
         const res = await fetch(`${BACKEND}/api/stats/audit?date=${selectedDate}`);
-        if (!res.ok) throw new Error();
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Error ${res.status}`);
+        }
         const json = await res.json();
         if (json.success && json.data) {
           setAuditData(json.data);
+        } else {
+          setError('La auditoría no devolvió datos.');
         }
       } catch (e) {
         console.error('Error fetching audit:', e);
+        setError(e.message || 'Error de conexión con el servidor.');
       } finally {
         setLoading(false);
       }
@@ -193,6 +204,23 @@ export default function StatsPage() {
 
       {loading ? (
         <div className="py-20"><Loader text="Ejecutando auditoría del motor predictivo..." /></div>
+      ) : error ? (
+        <div className="py-32 text-center">
+          <div className="inline-flex items-center gap-3 px-6 py-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 mb-6">
+            <span className="text-2xl">⚠️</span>
+            <div className="text-left">
+              <p className="font-black uppercase tracking-widest text-sm mb-1">Error al cargar datos</p>
+              <p className="text-xs opacity-70">{error}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSelectedDate(s => s)}
+            className="mt-2 text-accent-green text-xs font-black uppercase tracking-widest hover:underline"
+            style={{ display: 'block', margin: '0 auto' }}
+          >
+            Reintentar
+          </button>
+        </div>
       ) : !auditData ? (
         <div className="py-32 text-center opacity-30">
           <Calendar size={64} strokeWidth={1} className="mx-auto mb-6" />

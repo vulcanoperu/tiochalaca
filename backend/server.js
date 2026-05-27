@@ -1277,13 +1277,16 @@ let _auditEngine = null;
 async function loadAuditEngine() {
   if (_auditEngine) return _auditEngine;
   try {
+    // Usar tempEngine.mjs que vive dentro de backend/ y funciona en Vercel
+    // (evita rutas absolutas file:// que fallan en entornos serverless)
     const path = require('path');
-    const enginePath = path.resolve(__dirname, '../src/services/analysisEngine.js').replace(/\\/g, '/');
-    _auditEngine = await import('file:///' + enginePath);
-    logger.info('audit', 'analysisEngine cargado para auditoría.');
+    const enginePath = path.resolve(__dirname, './tempEngine.mjs');
+    const engineUrl = 'file:///' + enginePath.replace(/\\/g, '/');
+    _auditEngine = await import(engineUrl);
+    logger.info('audit', 'tempEngine.mjs cargado para auditoría.');
     return _auditEngine;
   } catch (e) {
-    logger.error('audit', 'Error cargando analysisEngine:', e.message);
+    logger.error('audit', 'Error cargando tempEngine:', e.message);
     return null;
   }
 }
