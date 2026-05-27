@@ -53,7 +53,7 @@ export default function Navbar() {
             <Zap size={20} strokeWidth={2.5} />
           </div>
           <div className="leading-none">
-            <p className="nav-brand-text text-lg font-black tracking-tight uppercase leading-none">Tio Chalaca</p>
+            <p className="nav-brand-text text-lg font-black tracking-tight uppercase leading-none">Chalaca</p>
             <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest mt-1">Analytics</p>
           </div>
         </Link>

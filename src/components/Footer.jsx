@@ -18,10 +18,10 @@ export default function Footer() {
             <Zap size={20} strokeWidth={2.5} />
           </div>
           
-          <div className="space-y-4">
-            <h2 className="text-xl font-black tracking-tighter text-white uppercase">Tio Chalaca</h2>
-            <p className="text-slate-500 text-[13px] font-medium leading-relaxed max-w-lg mx-auto">
-              Tio Chalaca es tu aliado estratégico en el mundo del fútbol. Analizamos miles de variables estadísticas, desde el xG hasta el historial histórico, para entregarte información procesada y picks de alto valor. Deja de jugar al azar y empieza a tomar decisiones basadas en datos reales para maximizar tus resultados jornada tras jornada.
+          <div className="flex flex-col gap-6 w-full md:w-[40%]">
+            <h2 className="text-xl font-black tracking-tighter text-white uppercase">Chalaca</h2>
+            <p className="text-sm text-slate-400 leading-relaxed font-medium">
+              Chalaca es tu aliado estratégico en el mundo del fútbol. Analizamos miles de variables estadísticas, desde el xG hasta el historial histórico, para entregarte información procesada y picks de alto valor. Deja de jugar al azar y empieza a tomar decisiones basadas en datos reales para maximizar tus resultados jornada tras jornada.
             </p>
             
             {/* Responsible Gambling Badge & Advice */}
@@ -62,8 +62,8 @@ export default function Footer() {
           </div>
 
           {/* Copyright */}
-          <p className="text-[10px] font-bold text-slate-800 uppercase tracking-[0.2em]">
-            © {currentYear} Tio Chalaca Analytics. Todos los derechos reservados.
+          <p className="text-[11px] font-bold tracking-widest uppercase">
+            © {currentYear} Chalaca Analytics. Todos los derechos reservados.
           </p>
         </div>
 
