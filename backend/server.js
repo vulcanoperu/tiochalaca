@@ -1578,7 +1578,8 @@ app.get('/api/stats/audit', async (req, res) => {
         });
 
         const picks = Array.isArray(picksResult) ? picksResult : (picksResult?.picks || []);
-        if (picks.length === 0) return;
+        // NO hacer return temprano aquí si picks.length === 0.
+        // Queremos que el partido cuente como "analizado" aunque no haya encontrado apuestas de valor.
 
         // Obtener stats reales del boxscore
         const getTeamStat = (homeAway, statName) => {
