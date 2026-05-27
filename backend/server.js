@@ -174,15 +174,100 @@ app.get('/api/fixtures/date/:date', async (req, res) => {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const isPast   = date < todayStr;
-  // TTL mejorado:
-  // - Días pasados: 4h (los resultados no cambian)
-  // - Hoy/futuro sin live: 5 min (redujo re-fetches de cada 1 min a cada 5 min)
-  // - Hoy con partidos en vivo: 2 min (más fresco, pero sin bombardear ESPN)
   const ttlBase  = isPast ? 240 : 5;
 
   const cacheKey = `espn_date_${date}`;
-  const cached   = cacheGet(cacheKey);
+
+  // 1. Caché en memoria (local dev, misma instancia)
+  const cached = cacheGet(cacheKey);
   if (cached) return res.json({ source: 'espn', fromCache: true, data: cached });
+
+  // 2. Caché en Supabase para días pasados (Vercel: sin memoria persistente)
+  if (isPast) {
+    try {
+      const { data: sbCached } = await supabase
+        .from('analysis_cache')
+        .select('data')
+        .eq('event_id', cacheKey)
+        .single();
+      if (sbCached?.data) {
+        cacheSet(cacheKey, sbCached.data, ttlBase);
+        return res.json({ source: 'espn', fromCache: true, data: sbCached.data });
+      }
+    } catch (_) {}
+  }
+
+  try {
+    const requestsWithSlug = Object.keys(ALLOWED_LEAGUES).map(l =>
+      axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 5000 })
+        .then(res => ({ slug: l, data: res.data }))
+    );
+    const resultsWithSlug = await Promise.allSettled(requestsWithSlug);
+
+    let allFixtures = [];
+    let hasLiveMatches = false;
+
+    for (const r of resultsWithSlug) {
+      if (r.status !== 'fulfilled' || !r.value.data.events) continue;
+      const { slug, data } = r.value;
+      const leagueInfo = data.leagues?.[0];
+      data.events.forEach(e => {
+        const comp = e.competitions?.[0];
+        const home = comp?.competitors?.find(c => c.homeAway === 'home');
+        const away = comp?.competitors?.find(c => c.homeAway === 'away');
+        const statusObj = comp?.status || e.status;
+        const state  = statusObj?.type?.state;
+        const getScore = c => {
+          if (!c) return null;
+          if (c.score?.value !== undefined) return parseInt(c.score.value);
+          if (c.score !== undefined) return parseInt(c.score);
+          return null;
+        };
+        let statusShort = 'NS';
+        if (state === 'post') statusShort = 'FT';
+        else if (state === 'in') {
+          const p = statusObj?.period;
+          statusShort = p === 1 ? '1H' : p === 2 ? '2H' : 'HT';
+          hasLiveMatches = true;
+        }
+
+        const fixture = {
+          fixture: { id: e.id, date: e.date, status: { short: statusShort, elapsed: statusObj?.clock ? Math.floor(statusObj.clock / 60) : 0 } },
+          league:  {
+            id:      slug,
+            name:    ALLOWED_LEAGUES[slug],
+            logo:    leagueInfo?.logos?.[0]?.href || '',
+            country: leagueInfo?.shortName || '',
+          },
+          teams: {
+            home: { id: home?.id, name: home?.team?.displayName || home?.team?.name, logo: home?.team?.logo },
+            away: { id: away?.id, name: away?.team?.displayName || away?.team?.name, logo: away?.team?.logo },
+          },
+          goals: { home: getScore(home), away: getScore(away) },
+        };
+        allFixtures.push(fixture);
+      });
+    }
+
+    // Si hay partidos en vivo, TTL de 2 min para mantener scores frescos
+    const finalTtl = hasLiveMatches ? 2 : ttlBase;
+    cacheSet(cacheKey, allFixtures, finalTtl);
+
+    // Persistir en Supabase si es un día pasado (para Vercel cold starts)
+    if (isPast && allFixtures.length > 0) {
+      supabase.from('analysis_cache').upsert({
+        event_id: cacheKey,
+        data: allFixtures,
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 días
+      }, { onConflict: 'event_id' }).then(() => {}).catch(() => {});
+    }
+
+    return res.json({ source: 'espn', fromCache: false, data: allFixtures });
+  } catch (err) {
+    return res.status(500).json({ error: 'Error obteniendo partidos por fecha', details: err.message });
+  }
+});
+
 
   try {
     // Timeout de 3s por liga: si ESPN tarda más, descartamos esa liga pero
@@ -1398,14 +1483,42 @@ app.get('/api/stats/audit', async (req, res) => {
   const date = req.query.date;
   if (!date) return res.status(400).json({ error: 'Falta parámetro date (YYYY-MM-DD)' });
 
-  // Verificar si ya tenemos el resultado cacheado en Supabase
+  const forceRefresh = req.query.refresh === 'true';
+
+  // ── Verificar caché de Supabase ────────────────────────────────────
+  // IMPORTANTE: solo usamos el caché si tiene TODOS los partidos del día.
+  // Si el caché fue guardado cuando solo algunos partidos habían terminado,
+  // lo ignoramos y recalculamos para obtener datos completos.
   const auditCacheKey = `audit_${date}`;
-  try {
-    const { data: cached } = await supabase.from('analysis_cache').select('data').eq('event_id', auditCacheKey).single();
-    if (cached && cached.data) {
-      return res.json({ success: true, fromCache: true, data: cached.data });
-    }
-  } catch (_) {}
+  if (!forceRefresh) {
+    try {
+      const { data: cached } = await supabase.from('analysis_cache').select('data').eq('event_id', auditCacheKey).single();
+      if (cached && cached.data) {
+        // Contar cuántos partidos ESPN tiene ahora para ese día
+        const dateParam = date.replace(/-/g, '');
+        let espnTotalFinished = 0;
+        try {
+          const espnChecks = await Promise.allSettled(
+            Object.keys(ALLOWED_LEAGUES).map(l =>
+              axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 4000 })
+                .then(r => r.data?.events?.filter(e => e.competitions?.[0]?.status?.type?.state === 'post').length || 0)
+                .catch(() => 0)
+            )
+          );
+          espnTotalFinished = espnChecks.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value : 0), 0);
+        } catch (_) {}
+
+        // Usar el caché solo si tiene tantos (o más) partidos como ESPN reporta ahora
+        const cachedMatchCount = cached.data.rawFixturesCount || cached.data.totalMatches || 0;
+        if (espnTotalFinished <= cachedMatchCount) {
+          logger.info('audit', `Caché válido para ${date}: ${cachedMatchCount} partidos cacheados vs ${espnTotalFinished} ESPN`);
+          return res.json({ success: true, fromCache: true, data: cached.data });
+        } else {
+          logger.info('audit', `Caché OBSOLETO para ${date}: ${cachedMatchCount} cacheados vs ${espnTotalFinished} ESPN → recalculando`);
+        }
+      }
+    } catch (_) {}
+  }
 
   // Cargar el motor de análisis
   const engine = await loadAuditEngine();
@@ -1603,16 +1716,25 @@ app.get('/api/stats/audit', async (req, res) => {
       reports: matchReports,
     };
 
-    // Cachear en Supabase (solo si ya terminó el día)
+    // ── Cachear en Supabase ────────────────────────────────────────────
+    // Solo guardar si:
+    //   1. El día ya terminó (date < hoy)
+    //   2. Se analizaron TODOS los partidos disponibles (sin partidos perdidos)
+    //      → matchReports.length debe igualar allFixtures.length
+    //      Esto previene cachear resultados parciales (cuando solo 8 de 12 habían terminado)
     const todayStr = new Date().toISOString().slice(0, 10);
-    if (date < todayStr && matchReports.length > 0) {
+    const allMatchesAnalyzed = matchReports.length >= allFixtures.length; // Todos los terminados fueron procesados
+    if (date < todayStr && matchReports.length > 0 && allMatchesAnalyzed) {
       try {
         await supabase.from('analysis_cache').upsert({
           event_id: auditCacheKey,
           data: auditResult,
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 días
         }, { onConflict: 'event_id' });
+        logger.info('audit', `Auditoría ${date} cacheada: ${matchReports.length}/${allFixtures.length} partidos, ${auditResult.winRate}% acierto`);
       } catch (_) {}
+    } else if (date < todayStr && !allMatchesAnalyzed) {
+      logger.info('audit', `Auditoría ${date} NO cacheada: solo ${matchReports.length}/${allFixtures.length} partidos procesados (resultado incompleto)`);
     }
 
     return res.json({ success: true, fromCache: false, data: auditResult });
