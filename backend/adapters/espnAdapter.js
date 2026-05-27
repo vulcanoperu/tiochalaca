@@ -5,6 +5,14 @@ const http = require('http');
 const https = require('https');
 const bsdAdapter = require('../../src/services/bsdAdapter.cjs');
 
+// ── Supabase: Persistencia de cuotas interceptadas ──────────────────
+let _supabase = null;
+try {
+  _supabase = require('../supabase/client');
+} catch (_) {
+  console.warn('[espnAdapter] Supabase no disponible, las cuotas no se persistirán.');
+}
+
 // Persistent agents for keep-alive
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
@@ -404,6 +412,11 @@ async function getEnrichedSummary(eventId) {
     }
   }
 
+  // ── INTERCEPTOR: Guardar cuotas en Supabase si están disponibles ────
+  if (marketOdds && _supabase) {
+    _saveOddsToSupabase(eventId, marketOdds).catch(() => {});
+  }
+
   // --- VARIABLES COMUNES PARA BSD ---
   let espnLeagueSlug = raw.header?.season?.slug || raw.header?.league?.slug;
   if (!espnLeagueSlug && raw.header?.links?.[0]?.href) {
@@ -423,7 +436,20 @@ async function getEnrichedSummary(eventId) {
       if (bsdOdds) {
         marketOdds = bsdOdds;
         console.log(`[bsdAdapter] Recuperadas cuotas de consenso de BSD para ${homeName} vs ${awayName}`);
+        // Persistir las cuotas de BSD también
+        if (_supabase) _saveOddsToSupabase(eventId, marketOdds).catch(() => {});
       }
+    }
+  }
+
+  // --- FALLBACK HISTÓRICO: Recuperar cuotas pre-match desde Supabase ---
+  // Si ni ESPN ni BSD tienen cuotas (partido ya terminó), las recuperamos de la DB
+  if (!marketOdds && _supabase) {
+    const historicalOdds = await getHistoricalOdds(eventId);
+    if (historicalOdds) {
+      marketOdds = historicalOdds;
+      marketOdds._fromHistory = true; // Flag para tracking
+      console.log(`[espnAdapter] ♻️ Cuotas recuperadas de Supabase para ${eventId}`);
     }
   }
   
@@ -514,6 +540,53 @@ async function getEnrichedSummary(eventId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PERSISTENCIA DE CUOTAS — Guardar/Recuperar de Supabase
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Guarda cuotas en Supabase para recuperación futura (post-partido).
+ * Se usa la tabla analysis_cache con prefijo 'odds_' para diferenciarlas.
+ * TTL: 30 días (las cuotas pre-match son inmutables una vez el partido arranca).
+ */
+async function _saveOddsToSupabase(eventId, odds) {
+  if (!_supabase || !odds) return;
+  try {
+    const key = `odds_${eventId}`;
+    const expiresAt = new Date(Date.now() + 30 * 24 * 3_600_000).toISOString(); // 30 días
+    await _supabase
+      .from('analysis_cache')
+      .upsert(
+        { event_id: key, data: odds, match_state: 'odds', expires_at: expiresAt },
+        { onConflict: 'event_id' }
+      );
+    console.log(`[espnAdapter] 💾 Cuotas guardadas en Supabase: ${key}`);
+  } catch (err) {
+    // Fallo silencioso — no interrumpir el flujo principal
+  }
+}
+
+/**
+ * Recupera cuotas históricas desde Supabase.
+ * Se usa como último recurso cuando ESPN y BSD ya no tienen las cuotas.
+ * @param {string} eventId
+ * @returns {Promise<object|null>}
+ */
+async function getHistoricalOdds(eventId) {
+  if (!_supabase) return null;
+  try {
+    const { data, error } = await _supabase
+      .from('analysis_cache')
+      .select('data')
+      .eq('event_id', `odds_${eventId}`)
+      .single();
+    if (error || !data) return null;
+    return data.data;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // INTERFAZ ESTÁNDAR DE ADAPTADOR
 // Cualquier adaptador futuro (fotmobAdapter, apiFootballAdapter) debe
 // implementar estas mismas funciones para ser intercambiable.
@@ -532,7 +605,7 @@ module.exports = {
   getEnrichedSummary,
   getTeamSchedule,
   mapESPNToApiSports,
+  getHistoricalOdds,                     // Recuperar cuotas históricas
   ALLOWED_LEAGUES,
   axiosInstance,
 };
-

@@ -1,0 +1,51 @@
+# ══════════════════════════════════════════════════════════════════════
+# CHALACA — Daily Predictions Capture
+# ══════════════════════════════════════════════════════════════════════
+# Ejecuta el script de captura diaria a las 08:00 AM hora Perú (13:00 UTC).
+# Intercepta cuotas de ESPN/BSD y guarda snapshots en Supabase.
+#
+# Secrets requeridos (GitHub Settings > Secrets):
+#   - SUPABASE_URL: URL del proyecto Supabase
+#   - SUPABASE_KEY: Service Role Key de Supabase
+# ══════════════════════════════════════════════════════════════════════
+
+name: Daily Predictions Capture
+
+on:
+  # CRON: 08:00 AM Perú (UTC-5) = 13:00 UTC
+  schedule:
+    - cron: '0 13 * * *'
+
+  # Permitir ejecución manual desde la UI de GitHub
+  workflow_dispatch:
+
+jobs:
+  capture:
+    name: Capture Daily Odds & Predictions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Run Daily Capture
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: node backend/jobs/dailyCapture.cjs
+
+      - name: Summary
+        if: always()
+        run: echo "✅ Daily capture completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"

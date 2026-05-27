@@ -1462,7 +1462,16 @@ app.get('/api/stats/audit', async (req, res) => {
   if (!engine) return res.status(500).json({ error: 'No se pudo cargar el motor de análisis' });
 
   try {
-    // 1. Obtener partidos del día
+    // 0. Cargar Snapshots generados por el CRON (la "foto de la mañana")
+    let snapshots = [];
+    try {
+      const { data } = await supabase.from('daily_snapshots').select('*').eq('snapshot_date', date);
+      if (data) snapshots = data;
+    } catch (e) {
+      logger.warn('audit', 'No se pudieron cargar daily_snapshots: ' + e.message);
+    }
+
+    // 1. Obtener partidos del día desde ESPN (para conocer los scores finales)
     const dateParam = date.replace(/-/g, '');
     const requests = Object.keys(ALLOWED_LEAGUES).map(l =>
       axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 5000 })
@@ -1504,80 +1513,98 @@ app.get('/api/stats/audit', async (req, res) => {
     // 2. Procesar cada partido
     let totalPicks = 0, hits = 0, misses = 0, skippedMatches = 0;
     let matchReports = [];
+    let usedSnapshots = 0;
 
     const processMatch = async (f) => {
       try {
         const eventId = f.fixture.id;
-        const [analysisResult, summary] = await Promise.all([
-          computeMatchAnalysis(eventId),
-          getMatchSummary(eventId),
-        ]);
-        const analysisData = analysisResult.data;
-        if (!analysisData) return;
-
         const homeScore = parseInt(f.goals.home);
         const awayScore = parseInt(f.goals.away);
         if (isNaN(homeScore) || isNaN(awayScore)) return;
         const totalGoals = homeScore + awayScore;
 
-        const homeId = f.teams.home.id;
-        const awayId = f.teams.away.id;
-        const hm = analysisData.homeMatches || [];
-        const am = analysisData.awayMatches || [];
+        let picks = [];
+        const snapshot = snapshots.find(s => s.event_id === String(eventId));
 
-        const homeForm = engine.calculateFormScore(hm, homeId);
-        const awayForm = engine.calculateFormScore(am, awayId);
-        const homeFormAtHome = engine.calculateFormScore(hm, homeId, 'home');
-        const awayFormAway = engine.calculateFormScore(am, awayId, 'away');
-        const homeSplit = engine.calculateOverUnder(hm, homeId);
-        const awaySplit = engine.calculateOverUnder(am, awayId);
-        const h2hData = engine.analyzeH2H(analysisData.h2h || [], homeId, awayId);
-        const homeSlots = engine.analyzeGoalsByTimeSlot(analysisData.homeHistEvs || [], homeId);
-        const awaySlots = engine.analyzeGoalsByTimeSlot(analysisData.awayHistEvs || [], awayId);
+        // ── ESTRATEGIA: Snapshot (CRON) vs Recalculación (Fallback) ──
+        let analysisData = null;
+        let summary = null;
 
-        const hGF = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsFor / homeFormAtHome.total : homeForm.goalsFor / Math.max(homeForm.total, 1);
-        const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
-        const aGF = awayFormAway.total >= 3 ? awayFormAway.goalsFor / awayFormAway.total : awayForm.goalsFor / Math.max(awayForm.total, 1);
-        const aGA = awayFormAway.total >= 3 ? awayFormAway.goalsAgainst / awayFormAway.total : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
-        const poissonProbs = engine.calcMatchProbabilities(hGF, hGA, aGF, aGA, f.league.name || '');
+        if (snapshot && Array.isArray(snapshot.predictions)) {
+          // A. Usar la fotografía del CRON (100% exacto a lo publicado en la mañana)
+          picks = snapshot.predictions;
+          usedSnapshots++;
+          // Necesitamos el summary para sacar los corners/tarjetas reales
+          summary = await getMatchSummary(eventId);
+        } else {
+          // B. Fallback: El partido no estaba en la mañana (ej. agregado tarde), lo calculamos de cero
+          const [analysisResult, summaryRes] = await Promise.all([
+            computeMatchAnalysis(eventId),
+            getMatchSummary(eventId),
+          ]);
+          analysisData = analysisResult.data;
+          summary = summaryRes;
+          if (!analysisData) return;
 
-        const city = summary?.gameInfo?.venue?.address?.city || '';
+          const homeId = f.teams.home.id;
+          const awayId = f.teams.away.id;
+          const hm = analysisData.homeMatches || [];
+          const am = analysisData.awayMatches || [];
 
-        const calcRest = (matches) => {
-          if (!matches?.length) return null;
-          const lastDate = matches[0]?.fixture?.date;
-          if (!lastDate) return null;
-          const matchDate = new Date(f.fixture.date);
-          return Math.floor((matchDate - new Date(lastDate)) / (1000 * 60 * 60 * 24));
-        };
+          const homeForm = engine.calculateFormScore(hm, homeId);
+          const awayForm = engine.calculateFormScore(am, awayId);
+          const homeFormAtHome = engine.calculateFormScore(hm, homeId, 'home');
+          const awayFormAway = engine.calculateFormScore(am, awayId, 'away');
+          const homeSplit = engine.calculateOverUnder(hm, homeId);
+          const awaySplit = engine.calculateOverUnder(am, awayId);
+          const h2hData = engine.analyzeH2H(analysisData.h2h || [], homeId, awayId);
+          const homeSlots = engine.analyzeGoalsByTimeSlot(analysisData.homeHistEvs || [], homeId);
+          const awaySlots = engine.analyzeGoalsByTimeSlot(analysisData.awayHistEvs || [], awayId);
 
-        const picksResult = engine.generatePicks({
-          homeStats: null, awayStats: null,
-          homeForm, awayForm, homeFormAtHome, awayFormAway,
-          homeSplitStats: homeSplit, awaySplitStats: awaySplit,
-          h2hData, homeSlots, awaySlots, poissonProbs,
-          isLive: false, liveClock: "0'", liveHomeGoals: 0, liveAwayGoals: 0,
-          marketInsight: analysisData.marketInsight,
-          homeCornersData: analysisData.homeCornersData,
-          awayCornersData: analysisData.awayCornersData,
-          homeCardsData: analysisData.homeCardsData,
-          awayCardsData: analysisData.awayCardsData,
-          injuries: analysisData.injuries || [],
-          marketOdds: analysisData.marketOdds,
-          matchStandings: analysisData.matchStandings,
-          advancedStats: analysisData.advancedStats,
-          refereeStats: analysisData.refereeStats,
-          leagueName: f.league.name,
-          homeTeamName: f.teams.home.name,
-          awayTeamName: f.teams.away.name,
-          city,
-          homeRestDays: calcRest(hm),
-          awayRestDays: calcRest(am),
-          homeHistory: hm,
-          awayHistory: am,
-        });
+          const hGF = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsFor / homeFormAtHome.total : homeForm.goalsFor / Math.max(homeForm.total, 1);
+          const hGA = homeFormAtHome.total >= 3 ? homeFormAtHome.goalsAgainst / homeFormAtHome.total : homeForm.goalsAgainst / Math.max(homeForm.total, 1);
+          const aGF = awayFormAway.total >= 3 ? awayFormAway.goalsFor / awayFormAway.total : awayForm.goalsFor / Math.max(awayForm.total, 1);
+          const aGA = awayFormAway.total >= 3 ? awayFormAway.goalsAgainst / awayFormAway.total : awayForm.goalsAgainst / Math.max(awayForm.total, 1);
+          const poissonProbs = engine.calcMatchProbabilities(hGF, hGA, aGF, aGA, f.league.name || '');
 
-        const picks = Array.isArray(picksResult) ? picksResult : (picksResult?.picks || []);
+          const city = summary?.gameInfo?.venue?.address?.city || '';
+
+          const calcRest = (matches) => {
+            if (!matches?.length) return null;
+            const lastDate = matches[0]?.fixture?.date;
+            if (!lastDate) return null;
+            const matchDate = new Date(f.fixture.date);
+            return Math.floor((matchDate - new Date(lastDate)) / (1000 * 60 * 60 * 24));
+          };
+
+          const picksResult = engine.generatePicks({
+            homeStats: null, awayStats: null,
+            homeForm, awayForm, homeFormAtHome, awayFormAway,
+            homeSplitStats: homeSplit, awaySplitStats: awaySplit,
+            h2hData, homeSlots, awaySlots, poissonProbs,
+            isLive: false, liveClock: "0'", liveHomeGoals: 0, liveAwayGoals: 0,
+            marketInsight: analysisData.marketInsight,
+            homeCornersData: analysisData.homeCornersData,
+            awayCornersData: analysisData.awayCornersData,
+            homeCardsData: analysisData.homeCardsData,
+            awayCardsData: analysisData.awayCardsData,
+            injuries: analysisData.injuries || [],
+            marketOdds: analysisData.marketOdds,
+            matchStandings: analysisData.matchStandings,
+            advancedStats: analysisData.advancedStats,
+            refereeStats: analysisData.refereeStats,
+            leagueName: f.league.name,
+            homeTeamName: f.teams.home.name,
+            awayTeamName: f.teams.away.name,
+            city,
+            homeRestDays: calcRest(hm),
+            awayRestDays: calcRest(am),
+            homeHistory: hm,
+            awayHistory: am,
+          });
+
+          picks = Array.isArray(picksResult) ? picksResult : (picksResult?.picks || []);
+        }
         // NO hacer return temprano aquí si picks.length === 0.
         // Queremos que el partido cuente como "analizado" aunque no haya encontrado apuestas de valor.
 
@@ -1641,6 +1668,8 @@ app.get('/api/stats/audit', async (req, res) => {
 
     // Ordenar por fallos (más fallos primero, para estudio)
     matchReports.sort((a, b) => b.misses - a.misses);
+
+    logger.info('audit', `Auditoría procesada. ${usedSnapshots} partidos usaron snapshot CRON. ${allFixtures.length - usedSnapshots} recalculados.`);
 
     const auditResult = {
       date,
