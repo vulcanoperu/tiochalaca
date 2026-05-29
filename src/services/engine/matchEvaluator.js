@@ -1,4 +1,5 @@
 import { checkCalendarFatigue, checkInternationalHangover, checkACLCongestion, checkAltitudeRisk, checkConmebolTravelAndClimateRisk, checkSniperCleanSheetGuard, isDerbyMatch, PERU_BIG3_NAMES, HIERARCHY_TEAMS, BRAZILIAN_TOP_TEAMS, SOUTH_COLD_TEAMS } from './contextFactors.js';
+import { calcCombinedProbs, calcPythagoreanExpectation, calcVolatilityIndex } from '../eloRating.js';
 
 
 export function evaluateMatchState(args) {
@@ -217,10 +218,10 @@ export function evaluateMatchState(args) {
     advancedStats?.away?.xG ? `xG: ${advancedStats.away.xG}` : '', awayMotivNote, altitudeSofteningNote,
   ].filter(Boolean).join(', ');
 
-  const homePythag = typeof calcPythagoreanExpectation !== 'undefined' ? calcPythagoreanExpectation(homeHistory, homeHistory?.[0]?.teams?.home?.id || null) : { adjustment: 0 };
-  const awayPythag = typeof calcPythagoreanExpectation !== 'undefined' ? calcPythagoreanExpectation(awayHistory, awayHistory?.[0]?.teams?.home?.id || null) : { adjustment: 0 };
-  const homeVolatility = typeof calcVolatilityIndex !== 'undefined' ? calcVolatilityIndex(homeHistory, homeHistory?.[0]?.teams?.home?.id || null) : { trustPenalty: 0 };
-  const awayVolatility = typeof calcVolatilityIndex !== 'undefined' ? calcVolatilityIndex(awayHistory, awayHistory?.[0]?.teams?.home?.id || null) : { trustPenalty: 0 };
+  const homePythag = calcPythagoreanExpectation(homeHistory, homeHistory?.[0]?.teams?.home?.id || null);
+  const awayPythag = calcPythagoreanExpectation(awayHistory, awayHistory?.[0]?.teams?.home?.id || null);
+  const homeVolatility = calcVolatilityIndex(homeHistory, homeHistory?.[0]?.teams?.home?.id || null);
+  const awayVolatility = calcVolatilityIndex(awayHistory, awayHistory?.[0]?.teams?.home?.id || null);
 
   const isHomeFortress = homeFormAtHome?.total >= 4 && homeFormAtHome?.losses === 0;
   let liga1HomeBonus = isLiga1Peru ? 18 : 0;

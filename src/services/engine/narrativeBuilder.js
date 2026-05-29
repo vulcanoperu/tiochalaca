@@ -51,22 +51,30 @@ export   const translateToPeruvian = (text) => {
   // Genera una explicación de 1-2 líneas en español coloquial peruano
   // basada en el contexto real del partido (motivación, jerarquía, forma).
 
-export   const buildNarrativeArgument = (market, selection) => {
+export const buildNarrativeArgument = (market, selection, args = {}, state = {}) => {
+    const { homeTeamName = 'Local', awayTeamName = 'Visitante' } = args;
+    const { 
+        isHomeHierarchy = false, isAwayHierarchy = false, 
+        homeContextNote = '', awayContextNote = '', 
+        homeEffectiveScore = 50, awayEffectiveScore = 50, 
+        projectedGoals = 2.5, laLigaRelegationZone = false 
+    } = state;
+    
     const home = homeTeamName;
     const away = awayTeamName;
     const homeStar  = isHomeHierarchy;
     const awayStar  = isAwayHierarchy;
-    const homeUrgent = homeMotivNote.toLowerCase().includes('urgencia') || homeContextNote.toLowerCase().includes('urgencia');
-    const awayUrgent = awayMotivNote.toLowerCase().includes('urgencia') || awayContextNote.toLowerCase().includes('urgencia');
+    const homeUrgent = homeContextNote.toLowerCase().includes('urgencia') || homeContextNote.toLowerCase().includes('supervivencia');
+    const awayUrgent = awayContextNote.toLowerCase().includes('urgencia') || awayContextNote.toLowerCase().includes('supervivencia');
     const homeStrong  = homeEffectiveScore >= 65;
     const awayStrong  = awayEffectiveScore >= 65;
-    const homeTired   = homeRest.label.includes('Cansancio') || homeRest.label.includes('Poco');
-    const awayTired   = awayRest.label.includes('Cansancio') || awayRest.label.includes('Poco');
-    const homeInjured = homeInjuries > 0;
-    const awayInjured = awayInjuries > 0;
+    const homeTired   = homeContextNote.includes('Cansancio') || homeContextNote.includes('Poco descanso');
+    const awayTired   = awayContextNote.includes('Cansancio') || awayContextNote.includes('Poco descanso');
+    const homeInjured = homeContextNote.includes('baja');
+    const awayInjured = awayContextNote.includes('baja');
     const bigGoals    = projectedGoals >= 2.8;
     const lowGoals    = projectedGoals <= 2.0;
-    const isChampion  = awayContextNote.toLowerCase().includes('campe') || homeContextNote.toLowerCase().includes('campe');
+    const isChampion  = awayContextNote.toLowerCase().includes('campe') || homeContextNote.toLowerCase().includes('campe') || awayContextNote.toLowerCase().includes('vacaciones') || homeContextNote.toLowerCase().includes('vacaciones');
     const relegZone   = laLigaRelegationZone ||
                         homeContextNote.toLowerCase().includes('descenso') ||
                         awayContextNote.toLowerCase().includes('descenso') ||

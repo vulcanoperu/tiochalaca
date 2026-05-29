@@ -6,7 +6,7 @@ export function createAddPickHelper(picks, args, state) {
   
   return function addPick(pick) {
     pick.argument = translateToPeruvian(pick.argument);
-    pick.narrative = buildNarrativeArgument(pick.market, pick.selection);
+    pick.narrative = buildNarrativeArgument(pick.market, pick.selection, args, state);
     
     // 1. Calcular cuota teórica base
     let theoreticalOdds = null;

@@ -4,7 +4,7 @@
 import { poissonProb } from '../poissonMath.js';
 
 export function generateWinnerPicks({ args, state, addPick }) {
-  const { h2hData, homeForm, awayForm, poissonProbs, homeTeamName, awayTeamName, marketOdds, city, isLive, marketInsight, homeFormAtHome, awayFormAway } = args;
+  const { h2hData, homeForm, awayForm, poissonProbs, homeTeamName, awayTeamName, marketOdds, city, isLive, marketInsight, homeFormAtHome, awayFormAway, leagueName } = args;
   const { homeEffectiveScore, awayEffectiveScore, h2hWeight, teamWeight, survivalBoost1X, survivalBoostHomeWin, survivalBoostX2, survivalBoostAwayWin, isHomeHierarchy, isAwayHierarchy, isLaLiga, isSaudi, isMLS, isLiga1Peru, isDerby, altitudeRisk, homeContextNote, awayContextNote, eloCombined, homeAvgGA, awayAvgGA, lambdaHome, lambdaAway, projectedGoals, combinedOver25 } = state;
   const AFA_GIANTS = ['river plate', 'boca juniors', 'racing', 'independiente', 'san lorenzo'];
   const SAUDI_BIG4 = ['al-hilal', 'al-nassr', 'al-ahli', 'al-ittihad'];
