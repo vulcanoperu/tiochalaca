@@ -149,9 +149,12 @@ async function runDailyAudit(date, forceRefresh = false) {
 
   const dateParam = date.replace(/-/g, '');
   const requests = Object.keys(ALLOWED_LEAGUES).map(l =>
-    axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 5000 })
+    axiosInstance.get(`https://site.api.espn.com/apis/site/v2/sports/soccer/${l}/scoreboard?dates=${dateParam}&limit=50`, { timeout: 15000 })
       .then(r => ({ slug: l, data: r.data }))
-      .catch(() => null)
+      .catch((e) => {
+        console.error(`Error fetching league ${l}:`, e.message);
+        return null;
+      })
   );
   const results = await Promise.allSettled(requests);
 
@@ -187,6 +190,7 @@ async function runDailyAudit(date, forceRefresh = false) {
 
   let totalPicks = 0, hits = 0, misses = 0, skippedMatches = 0;
   let matchReports = [];
+  let processErrors = [];
   let usedSnapshots = 0;
 
   const processMatch = async (f) => {
@@ -317,6 +321,8 @@ async function runDailyAudit(date, forceRefresh = false) {
         picks: pickDetails,
       });
     } catch (e) {
+      console.error('Error processing match:', f.fixture?.id, e);
+      processErrors.push({ id: f.fixture?.id, error: e.message || String(e) });
       skippedMatches++;
     }
   };
@@ -343,6 +349,7 @@ async function runDailyAudit(date, forceRefresh = false) {
     misses,
     winRate: totalPicks > 0 ? parseFloat(((hits / totalPicks) * 100).toFixed(1)) : 0,
     reports: matchReports,
+    debugErrors: processErrors.slice(0, 5), // Solo enviar los primeros 5 para no saturar
   };
 
   const todayStr = new Date().toISOString().slice(0, 10);
