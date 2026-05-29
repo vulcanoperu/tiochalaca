@@ -234,6 +234,13 @@ export default function StatsPage() {
             <p className="text-lg font-black text-white capitalize">{formatDate(selectedDate)}</p>
           </div>
 
+          {auditData.debugErrors && auditData.debugErrors.length > 0 && (
+            <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl mb-4 text-xs font-mono max-w-3xl mx-auto">
+              <p className="font-black mb-2 uppercase tracking-wider text-[10px]">Log de Errores Internos:</p>
+              {auditData.debugErrors.map((e, i) => <div key={i} className="mb-1">Match {e.id}: {e.error}</div>)}
+            </div>
+          )}
+
           {/* ── Resumen General ── */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="glass-card p-6 rounded-2xl border border-white/5 text-center relative overflow-hidden group border-l-4 border-l-purple-500">
