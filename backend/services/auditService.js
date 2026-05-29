@@ -198,7 +198,10 @@ async function runDailyAudit(date, forceRefresh = false) {
       const eventId = f.fixture.id;
       const homeScore = parseInt(f.goals.home);
       const awayScore = parseInt(f.goals.away);
-      if (isNaN(homeScore) || isNaN(awayScore)) return;
+      if (isNaN(homeScore) || isNaN(awayScore)) {
+        processErrors.push({ id: eventId, error: `Scores are NaN: home=${f.goals.home}, away=${f.goals.away}` });
+        return;
+      }
       const totalGoals = homeScore + awayScore;
 
       let picks = [];
@@ -217,7 +220,10 @@ async function runDailyAudit(date, forceRefresh = false) {
         ]);
         analysisData = analysisResult.data;
         summary = summaryRes;
-        if (!analysisData) return;
+        if (!analysisData) {
+          processErrors.push({ id: eventId, error: analysisResult.error || 'analysisData is null (summary header missing or error caught in computeMatchAnalysis)' });
+          return;
+        }
 
         const homeId = f.teams.home.id;
         const awayId = f.teams.away.id;
