@@ -12,11 +12,7 @@ async function loadEngine() {
   if (engineInstance) return engineInstance;
 
   try {
-    // Usar ruta absoluta (en formato file://) para que funcione bien en import() dinámico
-    const enginePath = path.resolve(__dirname, '../../src/services/analysisEngine.js');
-    const engineUrl = url.pathToFileURL(enginePath).href;
-
-    const engineModule = await import(engineUrl);
+    const engineModule = await import('../../src/services/analysisEngine.js');
     
     engineInstance = engineModule;
     logger.info('engineBridge', 'Motor de análisis frontend cargado correctamente vía import()');
