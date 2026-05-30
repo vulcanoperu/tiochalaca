@@ -124,7 +124,7 @@ export default function MatchesPage() {
     }
     setError(null);
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures/date/${dateKey}`);
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || ''}/api/fixtures?date=${dateKey}`);
       if (!res.ok) throw new Error('Error de conexión');
       const json = await res.json();
       const data = json.data || [];

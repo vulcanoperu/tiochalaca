@@ -122,7 +122,7 @@ export function useMatchData(fixtureId) {
 
     setLoading(true);
     try {
-      const summaryRes = await fetch(`${BACKEND_URL}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
+      const summaryRes = await fetch(`${BACKEND_URL}/api/espn/match/${fixtureId}/summary?_t=${Date.now()}`, { cache: 'no-store' });
       if (!summaryRes.ok) throw new Error('Error al obtener el partido del proveedor de datos');
       const summary = await summaryRes.json();
       if (!summary.header) throw new Error('Partido no encontrado');
@@ -282,7 +282,7 @@ export function useMatchData(fixtureId) {
   const pollLiveStatus = useCallback(async () => {
     if (!fixtureId) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/espn/summary/${fixtureId}?_t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`${BACKEND_URL}/api/espn/match/${fixtureId}/summary?_t=${Date.now()}`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
       const comp = data.header?.competitions?.[0];
