@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const cache = require('../cache/cacheManager');
 const { getMatchSummary } = require('../adapters/espnAdapter');
 const fotmobAdapter = require('../adapters/fotmobAdapter');
+const apiFootballAdapter = require('../adapters/apiFootballAdapter');
 
 const cacheGet = cache.get;
 const cacheSet = cache.set;
@@ -367,12 +368,34 @@ async function computeMatchAnalysis(eventId, refresh = false) {
     // Recuperar cuotas pre-match si estamos en vivo y ESPN ya las ocultó
     if (matchState === 'in' && (!result.marketOdds || !result.marketInsight)) {
       try {
-        const { data: cached } = await supabase.from('analysis_cache').select('data').eq('fixture_id', eventId).single();
+        const { data: cached } = await supabase.from('analysis_cache').select('data').eq('event_id', `odds_${eventId}`).single();
         if (cached && cached.data) {
           if (!result.marketOdds && cached.data.marketOdds) result.marketOdds = cached.data.marketOdds;
           if (!result.marketInsight && cached.data.marketInsight) result.marketInsight = cached.data.marketInsight;
         }
       } catch (err) { /* silent fallback */ }
+    }
+
+    // Último respaldo: API-Football (Si no hay cuotas por ESPN ni caché)
+    if (!result.marketOdds && (matchState === 'pre' || matchState === 'in' || matchState === 'post')) {
+      try {
+        const matchDateStr = result.fixture?.date 
+          ? new Date(result.fixture.date).toISOString().split('T')[0] 
+          : new Date().toISOString().split('T')[0];
+          
+        const fbOdds = await apiFootballAdapter.getMatchOdds(result.teams.home.name, result.teams.away.name, matchDateStr);
+        if (fbOdds) {
+          result.marketOdds = fbOdds;
+          // Guardar en caché para no volver a consumirla (ahorro de requests)
+          if (matchState === 'pre') {
+            await supabase.from('analysis_cache').upsert([
+              { event_id: `odds_${eventId}`, data: { marketOdds: fbOdds }, match_state: 'odds', expires_at: new Date(Date.now() + 86400000).toISOString() }
+            ], { onConflict: 'event_id' });
+          }
+        }
+      } catch (err) {
+        logger.error(`[API-Football Fallback] Error: ${err.message}`);
+      }
     }
 
     return { data: result, fromCache: false };

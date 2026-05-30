@@ -13,10 +13,11 @@ const { createClient } = require('@supabase/supabase-js');
 const bcrypt = require('bcryptjs');
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+// Usamos el Service Role Key si está disponible, de lo contrario fallback a la anon key
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.warn('⚠️ ADVERTENCIA: Faltan SUPABASE_URL o SUPABASE_KEY en backend/.env');
+  console.warn('⚠️ ADVERTENCIA: Faltan llaves de Supabase en backend/.env');
   console.warn('La base de datos no funcionará hasta que los agregues.');
 }
 
